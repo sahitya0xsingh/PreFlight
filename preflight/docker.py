@@ -20,6 +20,7 @@ from __future__ import annotations
 import functools
 import json
 import os
+import posixpath
 import platform
 import re
 import shlex
@@ -336,7 +337,10 @@ class DockerJob:
         if path:
             self.default_path = path
         self.sh(f"mkdir -p {shlex.quote(self.workspace)} {self.temp}/_runner_file_commands", root=True)
-        self.sh(f"chown -R $(id -u {self._user()}):$(id -g {self._user()}) {shlex.quote(self.workspace)} {self.temp}",
+        # The runner owns the workspace and its parent (work/<repo>), as on GitHub: some scripts
+        # put a second worktree next to the checkout.
+        self.sh(f"chown -R $(id -u {self._user()}):$(id -g {self._user()}) {shlex.quote(self.workspace)} {self.temp}"
+                f" && chown $(id -u {self._user()}):$(id -g {self._user()}) {shlex.quote(posixpath.dirname(self.workspace))}",
                 root=True, check=False)
         self._copy_workspace()
         self._start_services()
@@ -447,6 +451,12 @@ git update-ref refs/heads/preflight "$commit"
         if check and proc.returncode != 0:
             raise DockerError(f"`{script[:80]}` failed in the container: {(proc.stderr or proc.stdout)[:300]}")
         return proc.returncode
+
+    def oom_kills(self) -> int:
+        """Processes in this container the kernel killed for want of memory."""
+        out = self.sh_out("cat /sys/fs/cgroup/memory.events 2>/dev/null")
+        m = re.search(r"^oom_kill (\d+)", out, re.M)
+        return int(m.group(1)) if m else 0
 
     def sh_out(self, script: str) -> str:
         return _docker("exec", "-u", self._user(), self.name, "sh", "-c", script, check=False, timeout=120)

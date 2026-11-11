@@ -18,6 +18,7 @@ import json
 import os
 import posixpath
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -73,6 +74,7 @@ class JobResult:
     steps: list[StepResult] = field(default_factory=list)
     log_path: Path | None = None
     seconds: float = 0.0
+    oom: bool = False      # the kernel killed a process in it for want of memory
 
     @property
     def failed_step(self) -> StepResult | None:
@@ -421,6 +423,10 @@ class _JobRun:
                 ok, msg = _check_setup_action(step, detail)
             self.say(f"== {name}: {msg}")
             return StepResult(name, "passed" if ok else "failed", msg), {}, 0 if ok else 1
+        if actions.action_name(step.uses) == "actions/checkout":
+            other = self._checkout_other(step, step_env, scope, name)
+            if other is not None:
+                return other
         if kind in ("noop", "skip"):
             self.say(f"== {name}: skipped ({detail})")
             return StepResult(name, "skipped", f"{step.uses}: {detail}"), {}, 0
@@ -461,6 +467,37 @@ class _JobRun:
         if action.kind == "docker":
             return self._skip(name, f"{uses}: docker container actions are not run yet"), {}, 0
         return self._skip(name, f"{uses}: runs.using '{action.using}' is not supported"), {}, 0
+
+    def _checkout_other(self, step: Step, step_env: dict[str, Any], scope: _Scope,
+                        name: str) -> tuple[StepResult, dict[str, str], int] | None:
+        """``actions/checkout`` of another repository: clone it for real (Docker mode).
+
+        A checkout of the repo under test is a no-op (the code is already there);
+        returns None for that.
+        """
+        with_ = self.interp_map(step.with_, step_env, scope)
+        repo = (with_.get("repository") or "").strip()
+        this = expr.to_str(self.base_values.get("github", {}).get("repository"))
+        if not repo or repo.lower() == this.lower():
+            return None
+        if not self.box:
+            return self._skip(name, f"checks out {repo}; --docker clones it"), {}, 0
+        dest = (with_.get("path") or "").strip() or "."
+        depth = (with_.get("fetch-depth") or "1").strip()
+        ref = (with_.get("ref") or "").strip()
+        url = f"https://github.com/{repo}.git"
+        q = shlex.quote
+        if ref and re.fullmatch(r"[0-9a-f]{40}", ref):
+            script = (f"git init -q {q(dest)} && cd {q(dest)} && git remote add origin {q(url)} && "
+                      f"git fetch -q --depth {q(depth)} origin {q(ref)} && git checkout -q FETCH_HEAD")
+        else:
+            script = (f"git clone -q {'' if depth == '0' else '--depth ' + q(depth)} "
+                      f"{'--branch ' + q(ref) if ref else ''} {q(url)} {q(dest)}")
+        self.say(f"== {name}: cloning {repo}{'@' + ref if ref else ''} into {dest}")
+        out = self.run_script(script, "bash", self.workspace, {}, step.timeout_minutes)
+        if out.code != 0:
+            return StepResult(name, "failed", f"could not clone {repo} (exit {out.code})"), {}, out.code
+        return StepResult(name, "passed", f"cloned {repo}"), {}, 0
 
     def _skip(self, name: str, why: str) -> StepResult:
         self.say(f"== {name}: skipped ({why})")

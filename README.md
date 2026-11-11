@@ -43,6 +43,23 @@ preflight install-hook --docker        # the same, before every push
   rest, unless you pass `--keep-going`; with it, jobs that need a failed job are reported as not run.
 - Jobs that need Windows or macOS runners, secrets, or the PR itself are still left to GitHub.
 
+## Accuracy benchmark
+
+```bash
+preflight bench --repo checkstyle/checkstyle          # replay 20 recent PR commits (resumable)
+preflight bench --repo checkstyle/checkstyle --report # the report from the results so far
+```
+
+For recent PR commits whose CI finished on GitHub, `bench` rebuilds what GitHub tested (the PR merged into the
+base branch as it was when CI started), runs the jobs in Docker, and compares each job's pass/fail with GitHub's.
+Half the cases are PRs with a failed run, and every job GitHub failed is run, so caught failures are measured
+too; passed jobs are sampled (`--per-case`, default 6 job runs per case). Jobs that took over 15 minutes on GitHub
+are skipped (`--max-minutes`). It works in its own clone under `~/.preflight/bench/`, never in your checkout.
+
+The report gives agreement overall and split by GitHub's result, missed failures (passed here, failed on
+GitHub), false alarms, coverage (GitHub jobs PreFlight can run) and trigger accuracy, and lists every
+disagreement with GitHub's job link and the local failing step.
+
 ## What it does
 
 - **learn**: reads every repo's `.github/workflows`, finds other CI systems (Azure Pipelines, CircleCI, …),

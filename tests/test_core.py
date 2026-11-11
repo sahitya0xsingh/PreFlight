@@ -423,3 +423,111 @@ def test_local_composite_and_node_actions(tmp_path, monkeypatch):
     assert results["ok"].status == "passed", results["ok"].steps
     assert results["bad"].status == "failed"
     assert "no boom" in results["bad"].failed_step.detail
+
+
+from preflight import bench
+
+
+def _matrix_job():
+    wf = workflow.parse(textwrap.dedent("""
+        on: pull_request
+        jobs:
+          test:
+            strategy:
+              matrix:
+                target: [java, javadoc]
+                include:
+                  - target: java
+                    CONFIG: a.xml
+                  - target: extra
+                    CONFIG: b.xml
+            runs-on: ubuntu-latest
+            steps: [{run: "true"}]
+          named:
+            name: Build ${{ matrix.v }}
+            strategy: {matrix: {v: [1]}}
+            runs-on: ubuntu-latest
+            steps: [{run: "true"}]
+    """), "ci.yml")
+    return wf.jobs
+
+
+def test_bench_github_job_names():
+    test, named = _matrix_job()
+    names = [bench.github_name(test, c) for c in workflow.expand_matrix(test.matrix)]
+    # include-added keys are not part of the name; an include-only combination shows its values
+    assert names == ["test (java)", "test (javadoc)", "test (extra)"]
+    assert bench.github_name(named, {"v": 1}) == "Build 1"
+    gh = [bench.GhJob("ci.yml", "test (javadoc)", "success", 1, ""),
+          bench.GhJob("other.yml", "test (java)", "failure", 1, "")]
+    assert bench.match(gh, "ci.yml", test, {"target": "javadoc"}) is gh[0]
+    assert bench.match(gh, "ci.yml", test, {"target": "java", "CONFIG": "a.xml"}) is None
+
+
+def test_bench_report(tmp_path, monkeypatch):
+    monkeypatch.setenv("PREFLIGHT_HOME", str(tmp_path))
+    d = bench.bench_dir("o/r")
+    d.mkdir(parents=True)
+    rows = [bench.Row("s1", "t", "ci.yml", "a", "success", "passed"),
+            bench.Row("s1", "t", "ci.yml", "b", "failure", "failed"),
+            bench.Row("s1", "t", "ci.yml", "c", "failure", "passed", "missed"),
+            bench.Row("s1", "t", "ci.yml", "d", "success", "left-to-github", "other-os: needs Windows"),
+            bench.Row("s1", "t", "ci.yml", "e", "success", "not-sampled", "not in this case's sample")]
+    import json as _json
+    from dataclasses import asdict
+    (d / "results.jsonl").write_text("".join(_json.dumps(asdict(r)) + "\n" for r in rows))
+    text = bench.report("o/r")
+    assert "Agreement: 66.7% (2/3)" in text
+    assert "| Missed failures (local pass, GitHub fail) | 1 |" in text
+    assert "Coverage: GitHub jobs PreFlight can run | 80.0% (4/5)" in text
+    assert "ci.yml / c" in text
+
+
+@pytest.mark.skipif(not _docker_ready(), reason="needs Docker and the preflight-runner:24.04 image")
+def test_checkout_of_another_repo_clones_it(tmp_path, monkeypatch):
+    monkeypatch.setenv("PREFLIGHT_HOME", str(tmp_path / "home"))
+    root = tmp_path / "r"
+    (root / ".github" / "workflows").mkdir(parents=True)
+    (root / ".github" / "workflows" / "ci.yml").write_text(textwrap.dedent("""
+        on: pull_request
+        jobs:
+          j:
+            runs-on: ubuntu-latest
+            steps:
+              - uses: actions/checkout@v4
+              - uses: actions/checkout@v4
+                with: {repository: octocat/Hello-World, path: ./.ci-temp/hello}
+              - run: test -f .ci-temp/hello/README && test -f app.txt
+    """))
+    (root / "app.txt").write_text("x")
+    subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "i"], check=True)
+    plan = check.build_plan(root, "acme/widget", "main", ["app.txt"], None, None, quick=False, docker=True)
+    p = plan.to_run[0]
+    values = check.github_context(root, "acme/widget", "main", "pull_request")
+    ctx = expr.Context(values=dict(values, matrix={}))
+    with dockermod.DockerJob(p.job, {}, ctx, "acme/widget", root, "worktree", say=lambda m: None) as box:
+        res = run_job(p.wf, p.job, {}, values, root, tmp_path / "c.log", "Linux", box=box)
+    assert [s.status for s in res.steps] == ["skipped", "passed", "passed"], (tmp_path / "c.log").read_text()
+    dockermod.clear_snapshot_cache()
+
+
+@pytest.mark.skipif(not _docker_ready(), reason="needs Docker and the preflight-runner:24.04 image")
+def test_oom_kill_is_detected_and_workspace_parent_is_writable(repo, tmp_path):
+    job = workflow.parse(textwrap.dedent("""
+        on: pull_request
+        jobs:
+          j:
+            runs-on: ubuntu-latest
+            steps:
+              - run: mkdir ../sibling && echo ok
+    """), "x.yml").jobs[0]
+    values = check.github_context(repo, "acme/widget", "main", "pull_request")
+    ctx = expr.Context(values=dict(values, matrix={}))
+    with dockermod.DockerJob(job, {}, ctx, "acme/widget", repo, "worktree", say=lambda m: None) as box:
+        wf = workflow.parse("on: pull_request\njobs: {}", "x.yml")
+        res = run_job(wf, job, {}, values, repo, tmp_path / "o.log", "Linux", box=box)
+        assert res.status == "passed", (tmp_path / "o.log").read_text()
+        assert box.oom_kills() == 0
+    dockermod.clear_snapshot_cache()

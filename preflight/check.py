@@ -250,8 +250,13 @@ def _run_one(p: PlannedJob, combo: dict[str, Any], ctx_values: dict[str, Any], r
         if cancel.is_set():
             return JobResult(p.wf.name, p.job.id, label, "cancelled", log_path=None)
         box.start()
-        return run_job(p.wf, p.job, combo, ctx_values, root, log, "Linux", echo=verbose, box=box,
-                       cancel=cancel, echo_prefix=echo_prefix)
+        res = run_job(p.wf, p.job, combo, ctx_values, root, log, "Linux", echo=verbose, box=box,
+                      cancel=cancel, echo_prefix=echo_prefix)
+        if res.status == "failed" and box.oom_kills():
+            res.oom = True
+            with log.open("a") as f:
+                f.write("! the kernel killed a process in this job: Docker ran out of memory\n")
+        return res
     except (dockermod.DockerError, subprocess.SubprocessError, OSError) as e:
         if cancel.is_set():
             return JobResult(p.wf.name, p.job.id, label, "cancelled", log_path=None)
@@ -284,6 +289,7 @@ def execute(plan: Plan, root: Path, fail_fast: bool, verbose: bool, snapshot: st
     outcome: dict[tuple[str, str], str] = {}                      # job -> passed | failed | blocked
     results: list[tuple[int, JobResult]] = []
     order_index = {id(u): i for i, u in enumerate(pending)}
+    order_index_units = list(pending)
     lock = threading.Lock()
     cancel = threading.Event()
     active = _Active()
@@ -365,6 +371,24 @@ def execute(plan: Plan, root: Path, fail_fast: bool, verbose: bool, snapshot: st
                         say("  Stopping at the first failure (--keep-going runs everything).")
                         active.stop_all()
                 job_done(key)
+    # A job that ran out of memory next to others gets one more try on its own:
+    # GitHub gives every job a whole machine.
+    retry = [(i, r) for i, r in results if r.oom and parallel and not (fail_fast and cancel.is_set())]
+    if retry:
+        say(f"  {len(retry)} job run(s) ran out of Docker memory while others ran; retrying one at a time.")
+        units = dict(enumerate(order_index_units))
+        for i, old in retry:
+            p, combo = units[i]
+            label = job_label(p.job, combo)
+            say(f"  ▶ {p.wf.name} / {label} (alone)")
+            ctx_values = github_context(root, plan.repo, plan.base, p.wf.pr_event or "pull_request")
+            res = _run_one(p, combo, ctx_values, root, old.log_path or log_dir / f"retry-{i}.log", plan,
+                           verbose, snapshot, cancel, active, say, "    ")
+            mark = "✓" if res.status == "passed" else "✗"
+            tail = f": '{res.failed_step.name}' {res.failed_step.detail}" if res.failed_step else ""
+            say(f"  {mark} {p.wf.name} / {res.label} {res.status} in {res.seconds:.0f}s{tail}"
+                + (" (out of memory even alone)" if res.oom else ""))
+            results = [(j, res if j == i else r) for j, r in results]
     # Report in plan order, whatever order they finished in.
     return [r for _, r in sorted(results, key=lambda x: x[0])]
 

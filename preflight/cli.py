@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import __version__, check, docker, github, gitinfo, hook, learn, profile
+from . import __version__, bench, check, docker, github, gitinfo, hook, learn, profile
 
 
 def _repo_setup(args) -> tuple[Path, str, str | None, dict | None]:
@@ -102,6 +102,36 @@ def cmd_check(args) -> int:
     return 0
 
 
+def cmd_bench(args) -> int:
+    repo = args.repo
+    if not repo:
+        try:
+            repo, _ = check.pick_upstream(gitinfo.repo_root(Path.cwd()), None)
+        except (gitinfo.GitError, SystemExit):
+            raise SystemExit("preflight: pass --repo owner/name (or run inside a checkout)")
+    out = bench.bench_dir(repo)
+    if args.reset:
+        for name in ("cases.json", "results.jsonl"):
+            (out / name).unlink(missing_ok=True)
+    if not args.report:
+        if not docker.available():
+            raise SystemExit("preflight: bench runs jobs in Docker; `docker info` failed")
+        try:
+            bench.run(repo, args.cases, args.failing, args.per_case, args.max_minutes,
+                      args.jobs or docker.default_parallel(), args.only, args.seed, args.base)
+        except github.GitHubError as e:
+            print(f"preflight: {e}", file=sys.stderr)
+            return 2
+    if not (out / "results.jsonl").exists():
+        print("No results yet.")
+        return 0
+    text = bench.report(repo)
+    (out / "report.md").write_text(text)
+    print("\n" + text)
+    print(f"Report: {out / 'report.md'}")
+    return 0
+
+
 def cmd_install_hook(args) -> int:
     root = gitinfo.repo_root(Path.cwd())
     extra = (["--quick"] if args.quick else []) + (["--docker"] if args.docker else []) \
@@ -153,6 +183,21 @@ def main(argv: list[str] | None = None) -> int:
             s.add_argument("--verbose", "-v", action="store_true", help="stream step output")
             s.add_argument("--hook", action="store_true", help=argparse.SUPPRESS)
         s.set_defaults(fn=fn)
+
+    s = sub.add_parser("bench", help="measure how often local results match GitHub's on recent PRs")
+    s.add_argument("--repo", help="owner/name (default: this checkout's upstream)")
+    s.add_argument("--cases", type=int, default=20, help="PR commits to replay (default 20)")
+    s.add_argument("--failing", type=float, default=0.5, help="share of cases with a failed GitHub run (default 0.5)")
+    s.add_argument("--per-case", type=int, default=6,
+                   help="job runs per case: every job GitHub failed, topped up with random passed ones (0 = all)")
+    s.add_argument("--max-minutes", type=float, default=15, help="skip jobs that took longer on GitHub (0 = no limit)")
+    s.add_argument("--only", nargs="+", metavar="JOB", help="only jobs or workflows with these names")
+    s.add_argument("--jobs", "-j", type=int, metavar="N")
+    s.add_argument("--seed", type=int, default=1)
+    s.add_argument("--base", help="base branch (default: the repo's default branch)")
+    s.add_argument("--report", action="store_true", help="only print the report from results so far")
+    s.add_argument("--reset", action="store_true", help="forget earlier cases and results")
+    s.set_defaults(fn=cmd_bench)
 
     s = sub.add_parser("install-hook", help="run `preflight check` before every git push")
     s.add_argument("--quick", action="store_true")
