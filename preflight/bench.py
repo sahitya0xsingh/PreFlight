@@ -290,6 +290,8 @@ def run_case(repo: str, root: Path, case: Case, base_branch: str, per_case: int,
         status = r.status
         if status == "failed" and fs and "set PREFLIGHT_GITHUB_TOKEN" in fs.detail:
             status = "needs-token"   # refused by GitHub's API for want of a token: not a verdict on the code
+        elif status == "failed" and r.oom:
+            status = "needs-memory"  # killed for memory even alone; GitHub's runner has 16 GB
         rw = row(Path(p.wf.path).name, g, "", status, f"'{fs.name}' {fs.detail}" if fs else "")
         rw.seconds, rw.log = r.seconds, str(r.log_path or "")
         rows.append(rw)
@@ -358,14 +360,24 @@ def _pct(a: int, b: int) -> str:
     return f"{a / b:.1%} ({a}/{b})" if b else "n/a (0 runs)"
 
 
+def _oom_log(path: str) -> bool:
+    try:
+        return "Docker ran out of memory" in Path(path).read_text(errors="replace")[-2000:]
+    except OSError:
+        return False
+
+
 def report(repo: str, target: float = 0.95) -> str:
     rows = [json.loads(line) for line in (bench_dir(repo) / "results.jsonl").read_text().splitlines() if line.strip()]
+    for r in rows:   # rows written before needs-memory existed
+        if r["local"] == "failed" and r.get("log") and _oom_log(r["log"]):
+            r["local"] = "needs-memory"
     ran = [r for r in rows if r["local"] in ("passed", "failed") and r["github"] in CONCLUSIVE]
     gh_pass = [r for r in ran if r["github"] == "success"]
     gh_fail = [r for r in ran if r["github"] == "failure"]
     agree = sum(_agrees(r) for r in ran)
     conclusive = [r for r in rows if r["github"] in CONCLUSIVE]
-    covered = [r for r in conclusive if r["local"] not in ("left-to-github", "not-triggered", "unmatched", "needs-token")]
+    covered = [r for r in conclusive if r["local"] not in ("left-to-github", "not-triggered", "unmatched", "needs-token", "needs-memory")]
     trig = [r for r in conclusive if r["local"] != "unmatched"]
     trig_ok = [r for r in trig if r["local"] != "not-triggered"]
     cases = {r["sha"] for r in rows}
@@ -399,8 +411,9 @@ def report(repo: str, target: float = 0.95) -> str:
                          f"{r['local']} | {r['reason'].replace('|', '/')[:140]} |")
     left: dict[str, int] = {}
     for r in conclusive:
-        if r["local"] in ("left-to-github", "not-triggered", "unmatched", "needs-token"):
+        if r["local"] in ("left-to-github", "not-triggered", "unmatched", "needs-token", "needs-memory"):
             key = "needs-token: set PREFLIGHT_GITHUB_TOKEN" if r["local"] == "needs-token" else \
+                "needs-memory: Docker ran out of memory even with the job alone" if r["local"] == "needs-memory" else \
                 f"{r['local']}: {r['reason'].split(':')[0] if r['local'] == 'left-to-github' else r['workflow']}"
             left[key] = left.get(key, 0) + 1
     if left:
