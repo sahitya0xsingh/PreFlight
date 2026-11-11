@@ -201,8 +201,14 @@ def runner_os(runs_on: Any) -> str | None:
     return "Linux"
 
 
-def classify(job: Job, host_os: str) -> None:
-    """Set ``job.verdict`` and ``job.reasons`` for a machine running ``host_os``."""
+def classify(job: Job, host_os: str, docker: bool = False) -> None:
+    """Set ``job.verdict`` and ``job.reasons`` for a machine running ``host_os``.
+
+    With ``docker``, Linux jobs run in containers, so job containers and
+    service containers are runnable and the host OS does not matter for them.
+    """
+    if docker:
+        host_os = "Linux"
     reasons: list[str] = []
     if job.uses:
         job.verdict, job.reasons = REUSABLE, [f"calls reusable workflow {job.uses}"]
@@ -224,7 +230,7 @@ def classify(job: Job, host_os: str) -> None:
     if os_name == "macOS" and host_os != "macOS":
         job.verdict, job.reasons = OTHER_OS, ["needs a macOS runner"]
         return
-    if job.container or job.services:
+    if (job.container or job.services) and not docker:
         job.verdict, job.reasons = DOCKER, ["uses a job container or service containers"]
         return
     secrets = set()

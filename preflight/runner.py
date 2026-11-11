@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -69,11 +70,13 @@ def job_label(job: Job, combo: dict[str, Any]) -> str:
 
 
 def _parse_env_file(path: Path) -> dict[str, str]:
+    return _parse_env_text(path.read_text()) if path.exists() else {}
+
+
+def _parse_env_text(text: str) -> dict[str, str]:
     """Read ``KEY=value`` and ``KEY<<DELIM ... DELIM`` entries."""
     out: dict[str, str] = {}
-    if not path.exists():
-        return out
-    lines = path.read_text().splitlines()
+    lines = text.splitlines()
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -119,20 +122,57 @@ def run_job(
     log_path: Path,
     runner_os: str,
     echo: bool = False,
+    box: Any = None,
 ) -> JobResult:
+    """Run one matrix combination of ``job``.
+
+    ``box`` is a started :class:`preflight.docker.DockerJob`; without it the
+    steps run directly on this machine in ``root``.
+    """
     started = time.time()
     label = job_label(job, combo)
     result = JobResult(workflow=wf.name, job_id=job.id, label=label, status="passed", log_path=log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    temp = Path(tempfile.mkdtemp(prefix="preflight-"))
-    files = {k: temp / k.lower() for k in ("GITHUB_ENV", "GITHUB_PATH", "GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY")}
-    event_path = temp / "event.json"
-    event_path.write_text(json.dumps((base_values.get("github") or {}).get("event") or {}))
+    host_temp = Path(tempfile.mkdtemp(prefix="preflight-"))
+    if box:
+        temp = box.temp
+        workspace = box.workspace
+        cmd_dir = f"{temp}/_runner_file_commands"
+    else:
+        temp = str(host_temp)
+        workspace = str(root)
+        cmd_dir = temp
+    files = {k: f"{cmd_dir}/{k.lower()}" for k in ("GITHUB_ENV", "GITHUB_PATH", "GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY")}
+    event_path = f"{temp}/event.json"
+    event_json = json.dumps((base_values.get("github") or {}).get("event") or {})
+    gh_values = dict(base_values.get("github") or {}, workspace=workspace)
+    base_values = dict(base_values, github=gh_values)
+
+    def write(path: str, content: str) -> None:
+        if box:
+            box.write_file(path, content)
+        else:
+            Path(path).write_text(content)
+
+    def read_clear(path: str) -> str:
+        if box:
+            return box.read_and_clear(path)
+        f = Path(path)
+        if not f.exists():
+            return ""
+        text = f.read_text()
+        f.write_text("")
+        return text
+
+    write(event_path, event_json)
+    for f in files.values():
+        write(f, "")
 
     extra_env: dict[str, str] = {}
     extra_path: list[str] = []
     step_values: dict[str, Any] = {}
     status = "success"
+    arch = "ARM64" if os.uname().machine in ("arm64", "aarch64") else "X64"
 
     def ctx_for(env: dict[str, Any]) -> expr.Context:
         values = dict(base_values)
@@ -140,8 +180,8 @@ def run_job(
             "matrix": combo,
             "env": env,
             "steps": step_values,
-            "runner": {"os": runner_os, "temp": str(temp), "arch": os.uname().machine},
-            "job": {"status": status},
+            "runner": {"os": runner_os, "temp": temp, "arch": arch, "tool_cache": "/opt/hostedtoolcache"},
+            "job": {"status": status, "services": box.services_context() if box else {}},
             "secrets": {},
             "inputs": {},
             "vars": {},
@@ -159,7 +199,7 @@ def run_job(
             log.write(msg + "\n")
             log.flush()
 
-        say(f"# {wf.name} / {label}")
+        say(f"# {wf.name} / {label}" + (f"  [docker: {box.image}]" if box else ""))
         env: dict[str, Any] = {}
         env.update(interp_map(wf.env, env))
         env.update(interp_map(job.env, env))
@@ -182,13 +222,22 @@ def run_job(
             if step.uses:
                 kind, detail = actions.classify(step.uses)
                 if kind == "tool":
-                    ok, msg = _check_setup_action(step, detail)
+                    if box:
+                        with_ = interp_map(step.with_, step_env)
+                        say(f"== {step.name}: setting up")
+                        ok, msg, add_env, add_path = box.setup_tool(actions.action_name(step.uses), with_, detail)
+                        extra_env.update(add_env)
+                        for p in reversed(add_path):
+                            if p not in extra_path:
+                                extra_path.insert(0, p)
+                    else:
+                        ok, msg = _check_setup_action(step, detail)
                     say(f"== {step.name}: {msg}")
                     if not ok:
-                        result.steps.append(StepResult(step.name, "failed", msg))
+                        result.steps.append(StepResult(step.name, "failed", msg, time.time() - t0))
                         status = "failure"
                     else:
-                        result.steps.append(StepResult(step.name, "passed", msg))
+                        result.steps.append(StepResult(step.name, "passed", msg, time.time() - t0))
                 else:
                     say(f"== {step.name}: skipped ({detail})")
                     result.steps.append(StepResult(step.name, "skipped", f"{step.uses}: {detail}"))
@@ -205,40 +254,51 @@ def run_job(
                 status = "failure"
                 continue
 
-            if _SETUP_RE.search(script):
+            if not box and _SETUP_RE.search(script):
                 say(f"== {step.name}: skipped (machine setup; uses tools already installed here)")
                 result.steps.append(StepResult(step.name, "skipped", "machine setup step"))
                 continue
 
             shell = step.shell or job.defaults_run.get("shell") or wf.defaults_run.get("shell")
+            if shell is None and box and not box.has_bash:
+                shell = "sh"
             template = SHELLS.get(shell)
             if template is None:
                 template = shell.split() + (["{0}"] if "{0}" not in shell else [])
             suffix = ".py" if shell == "python" else ".sh"
-            script_file = temp / f"step{step.index}{suffix}"
-            script_file.write_text(script)
-            argv = [a.replace("{0}", str(script_file)) for a in template]
+            script_file = f"{temp}/step{step.index}{suffix}"
+            write(script_file, script)
+            argv = [a.replace("{0}", script_file) for a in template]
 
             wd = step.working_directory or job.defaults_run.get("working-directory") or wf.defaults_run.get("working-directory")
-            cwd = (root / expr.interpolate(str(wd), ctx)) if wd else root
+            wd = expr.interpolate(str(wd), ctx) if wd else None
+            if box:
+                cwd = posixpath.join(workspace, wd) if wd else workspace
+            else:
+                cwd = str(root / wd) if wd else str(root)
 
-            for f in files.values():
-                f.touch()
-            files["GITHUB_OUTPUT"].write_text("")
-            proc_env = os.environ.copy()
-            proc_env.pop("GITHUB_TOKEN", None)
+            write(files["GITHUB_OUTPUT"], "")
+            if box:
+                proc_env = {}
+            else:
+                proc_env = os.environ.copy()
+                proc_env.pop("GITHUB_TOKEN", None)
             proc_env.update({k: expr.to_str(v) for k, v in step_env.items()})
-            proc_env.update(_github_env(base_values, root, runner_os, temp, event_path))
-            proc_env.update({k: str(p) for k, p in files.items()})
-            if extra_path:
-                proc_env["PATH"] = os.pathsep.join(extra_path + [proc_env.get("PATH", "")])
+            proc_env.update(_github_env(base_values, workspace, runner_os, temp, event_path))
+            proc_env.update(files)
+            base_path = box.default_path if box else proc_env.get("PATH", "")
+            if extra_path or box:
+                proc_env["PATH"] = ":".join(extra_path + [base_path])
 
             timeout = step.timeout_minutes or job.timeout_minutes or 360
             say(f"== {step.name}\n$ {script.strip()}")
             try:
-                proc = subprocess.Popen(
-                    argv, cwd=cwd, env=proc_env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-                )
+                if box:
+                    proc = box.popen(argv, cwd, proc_env)
+                else:
+                    proc = subprocess.Popen(
+                        argv, cwd=cwd, env=proc_env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+                    )
                 assert proc.stdout is not None
                 for line in proc.stdout:
                     log.write(line)
@@ -255,16 +315,14 @@ def run_job(
 
             seconds = time.time() - t0
             # Values this step passed on to later steps.
-            extra_env.update(_parse_env_file(files["GITHUB_ENV"]))
-            files["GITHUB_ENV"].write_text("")
-            if files["GITHUB_PATH"].exists():
-                for p in files["GITHUB_PATH"].read_text().splitlines():
-                    if p.strip() and p.strip() not in extra_path:
-                        extra_path.insert(0, p.strip())
-                files["GITHUB_PATH"].write_text("")
+            extra_env.update(_parse_env_text(read_clear(files["GITHUB_ENV"])))
+            for p in read_clear(files["GITHUB_PATH"]).splitlines():
+                if p.strip() and p.strip() not in extra_path:
+                    extra_path.insert(0, p.strip())
+            outputs = _parse_env_text(read_clear(files["GITHUB_OUTPUT"]))
             if step.id:
                 step_values[step.id] = {
-                    "outputs": _parse_env_file(files["GITHUB_OUTPUT"]),
+                    "outputs": outputs,
                     "outcome": "success" if code == 0 else "failure",
                     "conclusion": "success" if code == 0 or _truthy(step.continue_on_error, ctx) else "failure",
                 }
@@ -279,12 +337,15 @@ def run_job(
                     missing = re.findall(r"(?:line \d+: )?([\w.+-]+): (?:command )?not found", log_path.read_text(errors="replace"))
                     if missing:
                         tool = missing[-1]
-                        hint = f"brew install {tool}" if runner_os == "macOS" else f"install {tool}"
-                        detail = f"missing tool '{tool}' (CI installs it on its own machine; run: {hint})"
+                        if box:
+                            detail = f"missing tool '{tool}' in the container image"
+                        else:
+                            hint = f"brew install {tool}" if runner_os == "macOS" else f"install {tool}"
+                            detail = f"missing tool '{tool}' (CI installs it on its own machine; run: {hint})"
                 result.steps.append(StepResult(step.name, "failed", detail, seconds))
                 status = "failure"
 
-    shutil.rmtree(temp, ignore_errors=True)
+    shutil.rmtree(host_temp, ignore_errors=True)
     result.status = "passed" if status == "success" else "failed"
     result.seconds = time.time() - started
     return result
@@ -296,16 +357,16 @@ def _truthy(value: Any, ctx: expr.Context) -> bool:
     return expr.to_bool(value)
 
 
-def _github_env(values: dict[str, Any], root: Path, runner_os: str, temp: Path, event_path: Path) -> dict[str, str]:
+def _github_env(values: dict[str, Any], workspace: str, runner_os: str, temp: str, event_path: str) -> dict[str, str]:
     gh = values.get("github") or {}
     return {
         "CI": "true",
         "GITHUB_ACTIONS": "true",
-        "GITHUB_WORKSPACE": str(root),
+        "GITHUB_WORKSPACE": workspace,
         "GITHUB_REPOSITORY": expr.to_str(gh.get("repository")),
         "GITHUB_REPOSITORY_OWNER": expr.to_str(gh.get("repository_owner")),
         "GITHUB_EVENT_NAME": expr.to_str(gh.get("event_name")),
-        "GITHUB_EVENT_PATH": str(event_path),
+        "GITHUB_EVENT_PATH": event_path,
         "GITHUB_REF": expr.to_str(gh.get("ref")),
         "GITHUB_SHA": expr.to_str(gh.get("sha")),
         "GITHUB_BASE_REF": expr.to_str(gh.get("base_ref")),
@@ -316,6 +377,7 @@ def _github_env(values: dict[str, Any], root: Path, runner_os: str, temp: Path, 
         "GITHUB_SERVER_URL": "https://github.com",
         "GITHUB_API_URL": "https://api.github.com",
         "RUNNER_OS": runner_os,
-        "RUNNER_TEMP": str(temp),
+        "RUNNER_TEMP": temp,
+        "RUNNER_ARCH": "ARM64" if os.uname().machine in ("arm64", "aarch64") else "X64",
         "PREFLIGHT": "1",
     }

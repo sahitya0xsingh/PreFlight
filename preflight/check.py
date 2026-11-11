@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import subprocess
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from . import docker as dockermod
 from . import expr, gitinfo, globs, profile, workflow
 from .learn import host_os
-from .runner import JobResult, job_label, run_job
+from .runner import JobResult, StepResult, job_label, run_job
 
 
 @dataclass
@@ -31,6 +33,7 @@ class Plan:
     jobs: list[PlannedJob] = field(default_factory=list)
     not_triggered: list[tuple[str, str]] = field(default_factory=list)  # (workflow, why)
     other_ci: list[str] = field(default_factory=list)
+    docker: bool = False
 
     @property
     def to_run(self) -> list[PlannedJob]:
@@ -104,8 +107,8 @@ def github_context(root: Path, repo: str, base: str, event_name: str) -> dict[st
 
 
 def build_plan(root: Path, repo: str, base: str, changed: list[str], prof: dict | None,
-               only: list[str] | None, quick: bool) -> Plan:
-    plan = Plan(repo=repo, base=base, changed=changed)
+               only: list[str] | None, quick: bool, docker: bool = False) -> Plan:
+    plan = Plan(repo=repo, base=base, changed=changed, docker=docker)
     if prof:
         entry = prof.get("repos", {}).get(repo.split("/")[1].lower(), {})
         plan.other_ci = entry.get("other_ci", [])
@@ -127,7 +130,7 @@ def build_plan(root: Path, repo: str, base: str, changed: list[str], prof: dict 
         for job in wf.jobs:
             if only and not any(o.lower() in (job.id.lower(), wf.name.lower(), rel.lower()) for o in only):
                 continue
-            workflow.classify(job, host)
+            workflow.classify(job, host, docker)
             fails = profile.failure_count(prof, repo, wf.path, job.id)
             combos = workflow.expand_matrix(job.matrix) if not isinstance(job.matrix, str) else [{}]
             if quick:
@@ -150,6 +153,8 @@ def build_plan(root: Path, repo: str, base: str, changed: list[str], prof: dict 
 
 def print_plan(plan: Plan) -> None:
     print(f"Repo {plan.repo}, comparing with {plan.base}: {len(plan.changed)} changed files")
+    print("Mode: " + ("Docker (each job in a fresh Ubuntu container)" if plan.docker
+                      else f"native (steps run directly on this {host_os()} machine; --docker isolates them)"))
     if plan.to_run:
         os_notes = {r for p in plan.to_run for r in p.job.reasons if r.startswith("Linux job run on")}
         for r in sorted(os_notes):
@@ -197,12 +202,27 @@ def _needs_order(jobs: list[PlannedJob]) -> list[PlannedJob]:
     return out
 
 
-def execute(plan: Plan, root: Path, fail_fast: bool, verbose: bool) -> list[JobResult]:
+def _run_one(p: PlannedJob, combo: dict[str, Any], ctx_values: dict[str, Any], root: Path, log: Path,
+             plan: Plan, verbose: bool, snapshot: str) -> JobResult:
+    if not plan.docker:
+        return run_job(p.wf, p.job, combo, ctx_values, root, log, host_os(), echo=verbose)
+    ctx = expr.Context(values=dict(ctx_values, matrix=combo, env={}, secrets={}, vars={}, inputs={}))
+    try:
+        with dockermod.DockerJob(p.job, combo, ctx, plan.repo, root, snapshot, say=print) as box:
+            return run_job(p.wf, p.job, combo, ctx_values, root, log, "Linux", echo=verbose, box=box)
+    except (dockermod.DockerError, subprocess.SubprocessError, OSError) as e:
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(f"# {p.wf.name} / {job_label(p.job, combo)}\n! docker: {e}\n")
+        return JobResult(p.wf.name, p.job.id, job_label(p.job, combo), "failed",
+                         [StepResult("start container", "failed", str(e).splitlines()[0][:200])], log)
+
+
+def execute(plan: Plan, root: Path, fail_fast: bool, verbose: bool, snapshot: str = "worktree") -> list[JobResult]:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     log_dir = profile.home() / "logs" / plan.repo.replace("/", "_") / stamp
     results: list[JobResult] = []
     outcome: dict[tuple[str, str], str] = {}
-    host = host_os()
+    dockermod.clear_snapshot_cache()
     for p in _needs_order(plan.to_run):
         blocked = [n for n in p.job.needs if outcome.get((p.wf.path, n)) not in (None, "passed")]
         if blocked:
@@ -215,7 +235,7 @@ def execute(plan: Plan, root: Path, fail_fast: bool, verbose: bool) -> list[JobR
             label = job_label(p.job, combo)
             safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in f"{Path(p.wf.path).stem}-{label}")
             print(f"  ▶ {p.wf.name} / {label} ...", flush=True)
-            res = run_job(p.wf, p.job, combo, ctx_values, root, log_dir / f"{safe}.log", host, echo=verbose)
+            res = _run_one(p, combo, ctx_values, root, log_dir / f"{safe}.log", plan, verbose, snapshot)
             results.append(res)
             mark = "✓" if res.status == "passed" else "✗"
             tail = ""
@@ -250,7 +270,8 @@ def write_report(plan: Plan, results: list[JobResult], path: Path, root: Path) -
     lines = [
         "## PreFlight local CI report",
         "",
-        f"Checked `{gitinfo.head_sha(root)[:12]}` against `{plan.base}` on {host_os()}, "
+        f"Checked `{gitinfo.head_sha(root)[:12]}` against `{plan.base}` "
+        f"{'in Docker (Ubuntu containers)' if plan.docker else 'on ' + host_os()}, "
         f"{time.strftime('%Y-%m-%d %H:%M')}.",
         "",
         f"**{len(passed)} of {len(results)} job runs passed locally.**",

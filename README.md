@@ -14,6 +14,24 @@ preflight install-hook                 # from now on, `git push` runs `preflight
 
 Skip the hook once with `PREFLIGHT_SKIP=1 git push` or `git push --no-verify`.
 
+## Docker mode
+
+```bash
+preflight check --docker               # each job in a fresh Ubuntu container
+preflight install-hook --docker        # the same, before every push
+```
+
+- Every job run starts from `preflight-runner:<ubuntu version>` (built once, picked from `runs-on`), or from
+  the job's own `container:` image. The code is copied in, so jobs never change your checkout. In hook mode only
+  committed code is copied.
+- Machine-setup steps (`sudo apt-get install …`) run for real, because they only touch the container.
+- `setup-java`, `setup-node`, `setup-python` and `setup-go` install the version the workflow (or matrix entry)
+  asks for. Versions are kept in the `preflight-toolcache` volume, and Maven/Gradle/npm caches in their own
+  volumes, so each downloads once.
+- `services:` containers start next to the job and are waited on until healthy. Steps reach them as
+  `localhost:<port>` and by service name.
+- Jobs that need Windows or macOS runners, secrets, or the PR itself are still left to GitHub.
+
 ## What it does
 
 - **learn**: reads every repo's `.github/workflows`, finds other CI systems (Azure Pipelines, CircleCI, …),
@@ -35,7 +53,7 @@ Every job gets a verdict:
 | `run` | runs fully here |
 | `partial` | runs, with some steps skipped (an action PreFlight does not emulate yet) |
 | `other-os` | needs a Windows (or macOS) runner |
-| `docker` | needs a job container or service containers (phase 2) |
+| `docker` | needs a job container or service containers; runs with `--docker` |
 | `secrets` | needs repository secrets |
 | `pr-metadata` | reads the PR's number or description, so it can only run once the PR exists |
 | `reusable`, `dynamic` | calls a reusable workflow, or computes its matrix or runner at run time (phase 2) |
@@ -43,9 +61,13 @@ Every job gets a verdict:
 
 ## Known limits (MVP)
 
-- Steps run directly on your machine, not in a container. Docker isolation is phase 2.
-- `setup-*` actions only check that the tool exists (and the Java major version); they do not switch versions,
+- Without `--docker`, steps run directly on your machine and `setup-*` actions only check that the tool exists,
   so every matrix entry uses the same local Python/Java/Node.
+- Docker mode runs containers at your machine's architecture (arm64 on Apple silicon); GitHub runs x64.
+  The image has common build tools, not everything on GitHub's ~30 GB runner image; a missing tool is reported by name.
+- The container's checkout has one commit (like `actions/checkout`'s default `fetch-depth: 1`), so jobs that diff
+  against the base branch's history see none.
+- `setup-java` always installs Temurin; other `distribution`s are noted in the log.
 - Only GitHub Actions jobs run. Other CI systems are detected and listed.
 - Unknown marketplace actions are skipped, and the job is marked `partial`.
 

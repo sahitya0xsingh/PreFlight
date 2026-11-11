@@ -269,3 +269,52 @@ def test_pr_metadata_job_is_left_to_github():
     for j in wf.jobs:
         workflow.classify(j, "Linux")
     assert [j.verdict for j in wf.jobs] == ["pr-metadata", "run"]
+
+
+# ------------------------------------------------------------------ docker mode
+
+from preflight import docker as dockermod
+
+
+def test_docker_mode_runs_service_jobs():
+    wf = workflow.parse(WF, "ci.yml")
+    verdicts = {}
+    for job in wf.jobs:
+        workflow.classify(job, "macOS", docker=True)
+        verdicts[job.id] = (job.verdict, job.reasons)
+    assert verdicts["db"][0] == "run"
+    assert verdicts["windows"][0] == "other-os"
+    assert verdicts["test"] == ("run", [])  # no "Linux job run on macOS" note in a container
+
+
+def test_docker_helpers():
+    assert dockermod.ubuntu_version("ubuntu-22.04") == "22.04"
+    assert dockermod.ubuntu_version(["self-hosted", "ubuntu-20.04"]) == "20.04"
+    assert dockermod.ubuntu_version("ubuntu-latest") == "24.04"
+    opts = "--health-cmd 'pg_isready -U x' --network foo -p 5432:5432 --health-retries=5 --hostname=db"
+    assert dockermod._service_options(opts) == ["--health-cmd", "pg_isready -U x", "--health-retries=5"]
+    script, what = dockermod.setup_script("actions/setup-java", {"java-version": "21", "distribution": "zulu"}, Path("."))
+    assert what == "Java 21 (Temurin used in place of zulu)"
+    assert "JAVA_HOME_21_" in script and "api.adoptium.net/v3/binary/latest/21/" in script
+    assert dockermod.setup_script("actions/setup-java", {}, Path(".")) is None
+
+
+def _docker_ready():
+    return dockermod.available() and subprocess.run(
+        ["docker", "image", "inspect", "preflight-runner:24.04"], capture_output=True).returncode == 0
+
+
+@pytest.mark.skipif(not _docker_ready(), reason="needs Docker and the preflight-runner:24.04 image")
+def test_docker_job_is_isolated(repo, tmp_path):
+    plan = check.build_plan(repo, "acme/widget", "main", ["app.py"], None, None, quick=False, docker=True)
+    p = plan.to_run[0]
+    values = check.github_context(repo, "acme/widget", "main", "pull_request")
+    ctx = expr.Context(values=dict(values, matrix={}))
+    with dockermod.DockerJob(p.job, {}, ctx, "acme/widget", repo, "worktree", say=lambda m: None) as box:
+        res = run_job(p.wf, p.job, {}, values, repo, tmp_path / "d.log", "Linux", box=box)
+    # The apt step really runs in the container; ok.txt is missing, so the job fails...
+    assert [s.status for s in res.steps][:2] == ["passed", "passed"]
+    assert res.failed_step.name == "must pass"
+    # ...and nothing the job wrote reached the checkout.
+    assert not (repo / "cleanup.txt").exists()
+    dockermod.clear_snapshot_cache()

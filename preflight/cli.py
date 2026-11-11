@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import __version__, check, github, gitinfo, hook, learn, profile
+from . import __version__, check, docker, github, gitinfo, hook, learn, profile
 
 
 def _repo_setup(args) -> tuple[Path, str, str | None, dict | None]:
@@ -61,7 +61,9 @@ def _plan(args, hook_mode: bool):
     if not prof:
         print(f"(no profile for {repo.split('/')[0]}: checks run in file order; "
               f"`preflight learn {repo.split('/')[0]}` ranks them by past failures)")
-    plan = check.build_plan(root, repo, base, changed, prof, args.only, args.quick)
+    if args.docker and not docker.available():
+        raise SystemExit("preflight: --docker needs a running Docker daemon (`docker info` failed)")
+    plan = check.build_plan(root, repo, base, changed, prof, args.only, args.quick, docker=args.docker)
     return root, plan
 
 
@@ -78,7 +80,8 @@ def cmd_check(args) -> int:
         print("\nNothing to run locally for this change.")
         return 0
     print("\nRunning:")
-    results = check.execute(plan, root, fail_fast=not args.keep_going, verbose=args.verbose)
+    results = check.execute(plan, root, fail_fast=not args.keep_going, verbose=args.verbose,
+                            snapshot="head" if args.hook else "worktree")
     report = Path(gitinfo.git(root, "rev-parse", "--absolute-git-dir")) / "preflight-report.md"
     check.write_report(plan, results, report, root)
     failed = [r for r in results if r.status != "passed"]
@@ -98,7 +101,8 @@ def cmd_check(args) -> int:
 
 def cmd_install_hook(args) -> int:
     root = gitinfo.repo_root(Path.cwd())
-    extra = (["--quick"] if args.quick else []) + (["--repo", args.repo] if args.repo else [])
+    extra = (["--quick"] if args.quick else []) + (["--docker"] if args.docker else []) \
+        + (["--repo", args.repo] if args.repo else [])
     path = hook.install(root, extra, args.force)
     print(f"Installed {path}. `git push` now runs `preflight check` first.")
     return 0
@@ -136,6 +140,8 @@ def main(argv: list[str] | None = None) -> int:
         s.add_argument("--base", help="base ref to compare with (default: <remote>/<default branch>)")
         s.add_argument("--only", nargs="+", metavar="JOB", help="only jobs or workflows with these names")
         s.add_argument("--quick", action="store_true", help="first matrix entry of each job only")
+        s.add_argument("--docker", action="store_true",
+                       help="run each job in a fresh Ubuntu container (also runs service and container jobs)")
         if name == "check":
             s.add_argument("--keep-going", action="store_true", help="run every job even after a failure")
             s.add_argument("--verbose", "-v", action="store_true", help="stream step output")
@@ -144,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
 
     s = sub.add_parser("install-hook", help="run `preflight check` before every git push")
     s.add_argument("--quick", action="store_true")
+    s.add_argument("--docker", action="store_true")
     s.add_argument("--repo")
     s.add_argument("--force", action="store_true", help="replace an existing pre-push hook")
     s.set_defaults(fn=cmd_install_hook)
