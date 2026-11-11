@@ -52,7 +52,7 @@ class JobResult:
     workflow: str
     job_id: str
     label: str
-    status: str  # passed | failed
+    status: str  # passed | failed | cancelled
     steps: list[StepResult] = field(default_factory=list)
     log_path: Path | None = None
     seconds: float = 0.0
@@ -123,11 +123,14 @@ def run_job(
     runner_os: str,
     echo: bool = False,
     box: Any = None,
+    cancel: Any = None,
+    echo_prefix: str = "    ",
 ) -> JobResult:
     """Run one matrix combination of ``job``.
 
     ``box`` is a started :class:`preflight.docker.DockerJob`; without it the
-    steps run directly on this machine in ``root``.
+    steps run directly on this machine in ``root``. When the ``cancel`` event
+    is set, the remaining steps are not run and the result is ``cancelled``.
     """
     started = time.time()
     label = job_label(job, combo)
@@ -204,7 +207,14 @@ def run_job(
         env.update(interp_map(wf.env, env))
         env.update(interp_map(job.env, env))
 
+        cancelled = False
         for step in job.steps:
+            if cancel is not None and cancel.is_set():
+                if not cancelled:
+                    say("! cancelled: another job failed (--keep-going runs everything)")
+                cancelled = True
+                result.steps.append(StepResult(step.name, "skipped", "cancelled"))
+                continue
             step_env = dict(env)
             step_env.update(extra_env)
             step_env.update(interp_map(step.env, step_env))
@@ -303,7 +313,7 @@ def run_job(
                 for line in proc.stdout:
                     log.write(line)
                     if echo:
-                        print("    " + line, end="")
+                        print(echo_prefix + line, end="", flush=True)
                 code = proc.wait(timeout=float(timeout) * 60)
             except subprocess.TimeoutExpired:
                 proc.kill()
@@ -346,7 +356,11 @@ def run_job(
                 status = "failure"
 
     shutil.rmtree(host_temp, ignore_errors=True)
-    result.status = "passed" if status == "success" else "failed"
+    if cancel is not None and cancel.is_set() and (cancelled or status != "success"):
+        # A step killed by the cancel is not this job's own failure.
+        result.status = "cancelled"
+    else:
+        result.status = "passed" if status == "success" else "failed"
     result.seconds = time.time() - started
     return result
 

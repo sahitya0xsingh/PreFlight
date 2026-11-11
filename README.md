@@ -30,6 +30,9 @@ preflight install-hook --docker        # the same, before every push
   volumes, so each downloads once.
 - `services:` containers start next to the job and are waited on until healthy. Steps reach them as
   `localhost:<port>` and by service name.
+- Jobs run in parallel: by default about one per 2.5 GB of Docker memory, up to 4 (`--jobs N` / `-j N` to change).
+  A job starts once every job it `needs` has passed. The first failure stops the running containers and cancels the
+  rest, unless you pass `--keep-going`; with it, jobs that need a failed job are reported as not run.
 - Jobs that need Windows or macOS runners, secrets, or the PR itself are still left to GitHub.
 
 ## What it does
@@ -68,6 +71,8 @@ Every job gets a verdict:
 - The container's checkout has one commit (like `actions/checkout`'s default `fetch-depth: 1`), so jobs that diff
   against the base branch's history see none.
 - `setup-java` always installs Temurin; other `distribution`s are noted in the log.
+- Parallel jobs share the Maven/Gradle/npm cache volumes, as jobs on one self-hosted runner would. Native mode
+  (no `--docker`) always runs one job at a time, because jobs there share your checkout.
 - Only GitHub Actions jobs run. Other CI systems are detected and listed.
 - Unknown marketplace actions are skipped, and the job is marked `partial`.
 

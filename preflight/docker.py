@@ -23,6 +23,7 @@ import platform
 import re
 import shlex
 import subprocess
+import threading
 import time
 import urllib.request
 import uuid
@@ -83,13 +84,32 @@ def available() -> bool:
         return False
 
 
+def default_parallel() -> int:
+    """Job runs at a time: about one per 2.5 GB of Docker memory (Maven builds are hungry), 1 to 4."""
+    try:
+        mem = int(_docker("info", "--format", "{{.MemTotal}}", timeout=20).strip() or 0)
+        cpus = int(_docker("info", "--format", "{{.NCPU}}", timeout=20).strip() or 1)
+    except (DockerError, ValueError, subprocess.TimeoutExpired):
+        return 2
+    return max(1, min(4, int(mem / 2.5e9), cpus // 2 or 1))
+
+
 def ubuntu_version(runs_on: Any) -> str:
     text = json.dumps(runs_on).lower()
     m = re.search(r"ubuntu-(\d\d\.\d\d)", text)
     return m.group(1) if m else "24.04"
 
 
+_IMAGE_LOCK = threading.Lock()
+_TAR_LOCK = threading.Lock()
+
+
 def ensure_runner_image(version: str, say: Callable[[str], None] = print) -> str:
+    with _IMAGE_LOCK:  # parallel jobs must not build the same image twice
+        return _ensure_runner_image(version, say)
+
+
+def _ensure_runner_image(version: str, say: Callable[[str], None]) -> str:
     tag = f"preflight-runner:{version}"
     out = _docker("image", "inspect", "--format", '{{ index .Config.Labels "org.preflight.recipe" }}', tag, check=False)
     if out.strip() == RECIPE:
@@ -261,7 +281,7 @@ class DockerJob:
     """A running job container plus its service containers."""
 
     def __init__(self, job, combo: dict[str, Any], ctx: expr.Context, repo: str, root: Path,
-                 snapshot: str, say: Callable[[str], None]):
+                 snapshot: str, say: Callable[[str], None], base_sha: str | None = None):
         self.job = job
         self.root = root
         self.say = say
@@ -270,6 +290,8 @@ class DockerJob:
         self.services: list[str] = []
         self.spec = _container_spec(job.container, ctx)
         repo_name = repo.split("/")[-1]
+        self.repo = repo
+        self.base_sha = base_sha
         if self.spec:
             self.image = self.spec["image"]
             self.workspace = f"/__w/{repo_name}/{repo_name}"
@@ -339,16 +361,30 @@ class DockerJob:
         tar = _snapshot_tar(self.root, self.snapshot)
         proc = subprocess.run(
             ["docker", "exec", "-i", "-u", self._user(), "-w", self.workspace, self.name, "tar", "-xf", "-"],
-            input=tar, capture_output=True,
+            input=tar, capture_output=True, timeout=600,
         )
         if proc.returncode != 0:
             raise DockerError(f"copying the workspace failed: {proc.stderr.decode(errors='replace')[:300]}")
-        if self.sh("command -v git >/dev/null", check=False) == 0:
-            self.sh(
-                "git init -q -b preflight . && git add -A && "
-                "git -c user.name=preflight -c user.email=preflight@localhost commit -qm snapshot --no-verify",
-                cwd=self.workspace, check=False,
-            )
+        if self.sh("command -v git >/dev/null", check=False) != 0:
+            return
+        # Like a PR checkout: one commit holding the code, whose parent is the
+        # base commit (fetched with depth 1), so `git diff origin/<base>...HEAD`
+        # and merge-base work. Without network access the commit has no parent.
+        url = f"https://github.com/{self.repo}.git"
+        base = shlex.quote(self.base_sha or "")
+        script = f"""
+git init -q -b preflight .
+git remote add origin {shlex.quote(url)}
+git add -A
+tree=$(git write-tree)
+parent=""
+if [ -n {base} ] && timeout 120 git fetch -q --depth=1 --no-tags origin {base} 2>/dev/null; then
+  parent="-p {base}"
+fi
+commit=$(git -c user.name=preflight -c user.email=preflight@localhost commit-tree "$tree" $parent -m preflight-snapshot)
+git update-ref refs/heads/preflight "$commit"
+"""
+        self.sh(script, cwd=self.workspace, check=False)
 
     # -- services
 
@@ -401,17 +437,20 @@ class DockerJob:
         argv = ["exec", "-u", "root" if root else self._user()]
         if cwd:
             argv += ["-w", cwd]
-        proc = subprocess.run(["docker", *argv, self.name, "sh", "-c", script], capture_output=True, text=True)
+        proc = subprocess.run(["docker", *argv, self.name, "sh", "-c", script], capture_output=True, text=True,
+                              timeout=600)
         if check and proc.returncode != 0:
             raise DockerError(f"`{script[:80]}` failed in the container: {(proc.stderr or proc.stdout)[:300]}")
         return proc.returncode
 
     def sh_out(self, script: str) -> str:
-        return _docker("exec", "-u", self._user(), self.name, "sh", "-c", script, check=False)
+        return _docker("exec", "-u", self._user(), self.name, "sh", "-c", script, check=False, timeout=120)
 
     def write_file(self, path: str, content: str) -> None:
-        subprocess.run(["docker", "exec", "-i", "-u", self._user(), self.name, "sh", "-c", f"cat > {shlex.quote(path)}"],
-                       input=content, text=True, check=True, capture_output=True)
+        # Content goes in argv, not stdin: `docker exec -i` with a short or empty
+        # stdin sometimes never returns.
+        subprocess.run(["docker", "exec", "-u", self._user(), self.name, "sh", "-c", 'printf %s "$1" > "$2"',
+                        "sh", content, path], check=True, capture_output=True, timeout=60)
 
     def read_and_clear(self, path: str) -> str:
         q = shlex.quote(path)
@@ -433,6 +472,9 @@ class DockerJob:
             ok = self.sh(f"command -v {shlex.quote(tool)} >/dev/null", check=False) == 0
             return ok, (f"{tool} found in the image" if ok else f"{tool} is not in the image"), {}, []
         script, what = made
+        # Containers share the tool-cache volume: one install at a time, so two
+        # jobs never unpack the same version into the same directory.
+        script = f"exec 9>{TOOL_CACHE}/.setup.lock\nflock 9\n" + script
         proc = subprocess.run(["docker", "exec", "-u", self._user(), self.name, "bash", "-eo", "pipefail", "-c", script],
                               capture_output=True, text=True)
         if proc.returncode != 0:
@@ -468,6 +510,11 @@ _TAR_CACHE: dict[tuple[str, str], bytes] = {}
 
 def _snapshot_tar(root: Path, snapshot: str) -> bytes:
     """A tar of the code to test: ``HEAD`` (commits only) or ``worktree`` (also uncommitted files)."""
+    with _TAR_LOCK:
+        return _snapshot_tar_locked(root, snapshot)
+
+
+def _snapshot_tar_locked(root: Path, snapshot: str) -> bytes:
     key = (str(root), snapshot)
     if key in _TAR_CACHE:
         return _TAR_CACHE[key]

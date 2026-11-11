@@ -81,13 +81,16 @@ def cmd_check(args) -> int:
         return 0
     print("\nRunning:")
     results = check.execute(plan, root, fail_fast=not args.keep_going, verbose=args.verbose,
-                            snapshot="head" if args.hook else "worktree")
+                            snapshot="head" if args.hook else "worktree",
+                            jobs=args.jobs or (docker.default_parallel() if args.docker else 1))
     report = Path(gitinfo.git(root, "rev-parse", "--absolute-git-dir")) / "preflight-report.md"
     check.write_report(plan, results, report, root)
-    failed = [r for r in results if r.status != "passed"]
+    failed = [r for r in results if r.status == "failed"]
+    cancelled = [r for r in results if r.status == "cancelled"]
     print()
-    if failed:
-        print(f"✗ {len(failed)} of {len(results)} job runs failed. Fix them before pushing.")
+    if failed or cancelled:
+        extra = f" ({len(cancelled)} cancelled after it)" if cancelled else ""
+        print(f"✗ {len(failed)} of {len(results)} job runs failed{extra}. Fix them before pushing.")
         if args.hook:
             print("  Push blocked. To push anyway: PREFLIGHT_SKIP=1 git push")
         return 1
@@ -102,6 +105,7 @@ def cmd_check(args) -> int:
 def cmd_install_hook(args) -> int:
     root = gitinfo.repo_root(Path.cwd())
     extra = (["--quick"] if args.quick else []) + (["--docker"] if args.docker else []) \
+        + ([f"--jobs={args.jobs}"] if args.jobs else []) \
         + (["--repo", args.repo] if args.repo else [])
     path = hook.install(root, extra, args.force)
     print(f"Installed {path}. `git push` now runs `preflight check` first.")
@@ -144,6 +148,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="run each job in a fresh Ubuntu container (also runs service and container jobs)")
         if name == "check":
             s.add_argument("--keep-going", action="store_true", help="run every job even after a failure")
+            s.add_argument("--jobs", "-j", type=int, metavar="N",
+                           help="job runs at a time in Docker mode (default: fits Docker's memory, at most 4)")
             s.add_argument("--verbose", "-v", action="store_true", help="stream step output")
             s.add_argument("--hook", action="store_true", help=argparse.SUPPRESS)
         s.set_defaults(fn=fn)
@@ -151,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("install-hook", help="run `preflight check` before every git push")
     s.add_argument("--quick", action="store_true")
     s.add_argument("--docker", action="store_true")
+    s.add_argument("--jobs", "-j", type=int, metavar="N")
     s.add_argument("--repo")
     s.add_argument("--force", action="store_true", help="replace an existing pre-push hook")
     s.set_defaults(fn=cmd_install_hook)

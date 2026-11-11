@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import subprocess
+import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -34,6 +36,7 @@ class Plan:
     not_triggered: list[tuple[str, str]] = field(default_factory=list)  # (workflow, why)
     other_ci: list[str] = field(default_factory=list)
     docker: bool = False
+    base_sha: str | None = None   # merge base of the branch and its base, the PR's parent commit
 
     @property
     def to_run(self) -> list[PlannedJob]:
@@ -109,6 +112,10 @@ def github_context(root: Path, repo: str, base: str, event_name: str) -> dict[st
 def build_plan(root: Path, repo: str, base: str, changed: list[str], prof: dict | None,
                only: list[str] | None, quick: bool, docker: bool = False) -> Plan:
     plan = Plan(repo=repo, base=base, changed=changed, docker=docker)
+    try:
+        plan.base_sha = gitinfo.git(root, "merge-base", base, "HEAD").strip()
+    except gitinfo.GitError:
+        plan.base_sha = None
     if prof:
         entry = prof.get("repos", {}).get(repo.split("/")[1].lower(), {})
         plan.other_ci = entry.get("other_ci", [])
@@ -202,56 +209,161 @@ def _needs_order(jobs: list[PlannedJob]) -> list[PlannedJob]:
     return out
 
 
+class _Active:
+    """Containers of running jobs, so a fail-fast cancel can stop them at once."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.boxes: set = set()
+
+    def add(self, box) -> None:
+        with self.lock:
+            self.boxes.add(box)
+
+    def remove(self, box) -> None:
+        with self.lock:
+            self.boxes.discard(box)
+
+    def stop_all(self) -> None:
+        with self.lock:
+            boxes = list(self.boxes)
+        for box in boxes:
+            box.stop()
+
+
 def _run_one(p: PlannedJob, combo: dict[str, Any], ctx_values: dict[str, Any], root: Path, log: Path,
-             plan: Plan, verbose: bool, snapshot: str) -> JobResult:
+             plan: Plan, verbose: bool, snapshot: str, cancel: threading.Event, active: _Active,
+             say, echo_prefix: str) -> JobResult:
+    label = job_label(p.job, combo)
     if not plan.docker:
-        return run_job(p.wf, p.job, combo, ctx_values, root, log, host_os(), echo=verbose)
+        return run_job(p.wf, p.job, combo, ctx_values, root, log, host_os(), echo=verbose,
+                       cancel=cancel, echo_prefix=echo_prefix)
     ctx = expr.Context(values=dict(ctx_values, matrix=combo, env={}, secrets={}, vars={}, inputs={}))
+    box = None
     try:
-        with dockermod.DockerJob(p.job, combo, ctx, plan.repo, root, snapshot, say=print) as box:
-            return run_job(p.wf, p.job, combo, ctx_values, root, log, "Linux", echo=verbose, box=box)
+        box = dockermod.DockerJob(p.job, combo, ctx, plan.repo, root, snapshot, say=say,
+                                  base_sha=plan.base_sha)
+        active.add(box)
+        if cancel.is_set():
+            return JobResult(p.wf.name, p.job.id, label, "cancelled", log_path=None)
+        box.start()
+        return run_job(p.wf, p.job, combo, ctx_values, root, log, "Linux", echo=verbose, box=box,
+                       cancel=cancel, echo_prefix=echo_prefix)
     except (dockermod.DockerError, subprocess.SubprocessError, OSError) as e:
+        if cancel.is_set():
+            return JobResult(p.wf.name, p.job.id, label, "cancelled", log_path=None)
         log.parent.mkdir(parents=True, exist_ok=True)
-        log.write_text(f"# {p.wf.name} / {job_label(p.job, combo)}\n! docker: {e}\n")
-        return JobResult(p.wf.name, p.job.id, job_label(p.job, combo), "failed",
+        log.write_text(f"# {p.wf.name} / {label}\n! docker: {e}\n")
+        return JobResult(p.wf.name, p.job.id, label, "failed",
                          [StepResult("start container", "failed", str(e).splitlines()[0][:200])], log)
+    finally:
+        if box is not None:
+            active.remove(box)
+            box.stop()
 
 
-def execute(plan: Plan, root: Path, fail_fast: bool, verbose: bool, snapshot: str = "worktree") -> list[JobResult]:
+def execute(plan: Plan, root: Path, fail_fast: bool, verbose: bool, snapshot: str = "worktree",
+            jobs: int = 1) -> list[JobResult]:
+    """Run the plan, up to ``jobs`` job runs at a time (Docker mode only).
+
+    A job starts once every job it ``needs`` has passed. With ``fail_fast``,
+    the first failure cancels the rest: running containers are stopped and
+    nothing new starts.
+    """
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     log_dir = profile.home() / "logs" / plan.repo.replace("/", "_") / stamp
-    results: list[JobResult] = []
-    outcome: dict[tuple[str, str], str] = {}
     dockermod.clear_snapshot_cache()
-    for p in _needs_order(plan.to_run):
-        blocked = [n for n in p.job.needs if outcome.get((p.wf.path, n)) not in (None, "passed")]
-        if blocked:
-            outcome[(p.wf.path, p.job.id)] = "blocked"
-            print(f"  - {p.wf.name} / {p.job.id}: not run, needs {', '.join(blocked)}")
-            continue
-        ctx_values = github_context(root, plan.repo, plan.base, p.wf.pr_event or "pull_request")
-        job_ok = True
-        for combo in p.combos:
-            label = job_label(p.job, combo)
-            safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in f"{Path(p.wf.path).stem}-{label}")
-            print(f"  ▶ {p.wf.name} / {label} ...", flush=True)
-            res = _run_one(p, combo, ctx_values, root, log_dir / f"{safe}.log", plan, verbose, snapshot)
-            results.append(res)
-            mark = "✓" if res.status == "passed" else "✗"
-            tail = ""
-            if res.failed_step:
-                tail = f": '{res.failed_step.name}' {res.failed_step.detail}"
-            print(f"    {mark} {res.status} in {res.seconds:.0f}s{tail}")
-            if res.status != "passed":
-                job_ok = False
-                _print_log_tail(res.log_path)
-                if fail_fast:
+    jobs = max(1, jobs if plan.docker else 1)  # native jobs share one checkout
+    order = _needs_order(plan.to_run)
+    keys = {(p.wf.path, p.job.id) for p in order}
+    pending = [(p, combo) for p in order for combo in p.combos]
+    left = {(p.wf.path, p.job.id): len(p.combos) for p in order}   # unfinished runs per job
+    outcome: dict[tuple[str, str], str] = {}                      # job -> passed | failed | blocked
+    results: list[tuple[int, JobResult]] = []
+    order_index = {id(u): i for i, u in enumerate(pending)}
+    lock = threading.Lock()
+    cancel = threading.Event()
+    active = _Active()
+    parallel = jobs > 1
+
+    def say(msg: str) -> None:
+        with lock:
+            print(msg, flush=True)
+
+    def deps(p: PlannedJob) -> list[tuple[str, str]]:
+        return [(p.wf.path, n) for n in p.job.needs if (p.wf.path, n) in keys]
+
+    def job_done(key: tuple[str, str]) -> None:
+        if left[key] == 0 and key not in outcome:
+            outcome[key] = "passed"
+
+    if parallel:
+        print(f"  ({jobs} job runs at a time; --jobs changes this)")
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        running: dict[Future, tuple[PlannedJob, dict[str, Any]]] = {}
+        while pending or running:
+            # Start every run whose needs have passed, in ranked order.
+            for unit in list(pending):
+                if len(running) >= jobs or cancel.is_set():
                     break
-        outcome[(p.wf.path, p.job.id)] = "passed" if job_ok else "failed"
-        if not job_ok and fail_fast:
-            print("  Stopping at the first failure (--keep-going runs everything).")
-            break
-    return results
+                p, combo = unit
+                key = (p.wf.path, p.job.id)
+                states = [outcome.get(d) for d in deps(p)]
+                if any(s in ("failed", "blocked") for s in states):
+                    pending.remove(unit)
+                    left[key] -= 1
+                    if outcome.get(key) != "blocked":
+                        outcome[key] = "blocked"
+                        bad = [d[1] for d, s in zip(deps(p), states) if s in ("failed", "blocked")]
+                        say(f"  - {p.wf.name} / {p.job.id}: not run, needs {', '.join(bad)}")
+                    continue
+                if any(s != "passed" for s in states):
+                    continue  # a dependency is still running
+                pending.remove(unit)
+                label = job_label(p.job, combo)
+                safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in f"{Path(p.wf.path).stem}-{label}")
+                say(f"  ▶ {p.wf.name} / {label}" + (" started" if parallel else " ..."))
+                ctx_values = github_context(root, plan.repo, plan.base, p.wf.pr_event or "pull_request")
+                prefix = f"    [{label}] " if parallel else "    "
+                fut = pool.submit(_run_one, p, combo, ctx_values, root, log_dir / f"{safe}.log", plan,
+                                  verbose, snapshot, cancel, active, say, prefix)
+                running[fut] = unit
+            if cancel.is_set() and pending:
+                for p, _ in pending:
+                    left[(p.wf.path, p.job.id)] -= 1
+                pending.clear()
+            if not running:
+                if pending:  # nothing can start: a needs cycle or a missing job
+                    for p, _ in pending:
+                        say(f"  - {p.wf.name} / {p.job.id}: not run, its needs never finished")
+                    pending.clear()
+                break
+            done, _ = wait(running, return_when=FIRST_COMPLETED)
+            for fut in done:
+                unit = running.pop(fut)
+                p, combo = unit
+                key = (p.wf.path, p.job.id)
+                res = fut.result()
+                results.append((order_index[id(unit)], res))
+                left[key] -= 1
+                with lock:
+                    if res.status == "cancelled":
+                        print(f"  ■ {p.wf.name} / {res.label}: cancelled")
+                    else:
+                        mark = "✓" if res.status == "passed" else "✗"
+                        tail = f": '{res.failed_step.name}' {res.failed_step.detail}" if res.failed_step else ""
+                        print(f"  {mark} {p.wf.name} / {res.label} {res.status} in {res.seconds:.0f}s{tail}")
+                    if res.status == "failed":
+                        _print_log_tail(res.log_path)
+                if res.status == "failed":
+                    outcome[key] = "failed"
+                    if fail_fast and not cancel.is_set():
+                        cancel.set()
+                        say("  Stopping at the first failure (--keep-going runs everything).")
+                        active.stop_all()
+                job_done(key)
+    # Report in plan order, whatever order they finished in.
+    return [r for _, r in sorted(results, key=lambda x: x[0])]
 
 
 def _print_log_tail(path: Path | None, lines: int = 25) -> None:
@@ -266,7 +378,8 @@ def _print_log_tail(path: Path | None, lines: int = 25) -> None:
 
 def write_report(plan: Plan, results: list[JobResult], path: Path, root: Path) -> None:
     passed = [r for r in results if r.status == "passed"]
-    failed = [r for r in results if r.status != "passed"]
+    failed = [r for r in results if r.status == "failed"]
+    cancelled = [r for r in results if r.status == "cancelled"]
     lines = [
         "## PreFlight local CI report",
         "",
@@ -280,7 +393,7 @@ def write_report(plan: Plan, results: list[JobResult], path: Path, root: Path) -
         "| --- | --- |",
     ]
     for r in results:
-        lines.append(f"| {r.workflow} / {r.label} | {'passed' if r.status == 'passed' else 'failed'} |")
+        lines.append(f"| {r.workflow} / {r.label} | {r.status} |")
     if plan.skipped:
         lines += ["", "Not run locally (left to GitHub):", ""]
         lines += [f"- {p.wf.name} / {p.job.id}: {p.reason}" for p in plan.skipped]
@@ -288,4 +401,6 @@ def write_report(plan: Plan, results: list[JobResult], path: Path, root: Path) -
         lines += ["", f"Other CI not run locally: {', '.join(plan.other_ci)}."]
     if failed:
         lines += ["", "Failed:", ""] + [f"- {r.workflow} / {r.label}" for r in failed]
+    if cancelled:
+        lines += ["", f"{len(cancelled)} job runs were cancelled after the first failure."]
     path.write_text("\n".join(lines) + "\n")

@@ -318,3 +318,34 @@ def test_docker_job_is_isolated(repo, tmp_path):
     # ...and nothing the job wrote reached the checkout.
     assert not (repo / "cleanup.txt").exists()
     dockermod.clear_snapshot_cache()
+
+
+@pytest.mark.skipif(not _docker_ready(), reason="needs Docker and the preflight-runner:24.04 image")
+def test_parallel_needs_and_fail_fast(tmp_path, monkeypatch):
+    monkeypatch.setenv("PREFLIGHT_HOME", str(tmp_path / "home"))
+    root = tmp_path / "par"
+    (root / ".github" / "workflows").mkdir(parents=True)
+    (root / ".github" / "workflows" / "ci.yml").write_text(textwrap.dedent(
+        """
+        on: [pull_request]
+        jobs:
+          bad:
+            runs-on: ubuntu-latest
+            steps: [{run: "sleep 1 && exit 1"}]
+          slow:
+            runs-on: ubuntu-latest
+            steps: [{run: "sleep 60"}]
+          after:
+            needs: bad
+            runs-on: ubuntu-latest
+            steps: [{run: "true"}]
+        """
+    ))
+    _git(root, "init", "-q", "-b", "main")
+    _git(root, "add", ".")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+    plan = check.build_plan(root, "acme/par", "main", ["x"], None, None, quick=False, docker=True)
+    t0 = __import__("time").time()
+    results = check.execute(plan, root, fail_fast=True, verbose=False, jobs=3)
+    assert {r.job_id: r.status for r in results} == {"bad": "failed", "slow": "cancelled"}
+    assert __import__("time").time() - t0 < 40  # slow was stopped, not waited for
