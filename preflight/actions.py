@@ -8,6 +8,9 @@ Each known action gets a handler kind:
 - ``skip``: the action talks to GitHub or another service; skipping it does
   not change whether the code passes.
 
+- ``needs-docker``: the action starts Docker containers itself; the job is
+  left to GitHub, as job containers have no Docker daemon.
+
 Anything else is ``unknown``: the step is skipped and the job is reported as
 partly covered.
 """
@@ -38,6 +41,13 @@ KNOWN: dict[str, tuple[str, str]] = {
     "github/codeql-action/upload-sarif": ("skip", "uploads results to GitHub"),
     "codecov/codecov-action": ("skip", "uploads coverage"),
     "peter-evans/create-or-update-comment": ("skip", "comments on the PR"),
+    # These run their tools in Docker containers of their own. Job containers
+    # have no Docker daemon, so the job is left to GitHub.
+    "jetbrains/qodana-action": ("needs-docker", "runs its linter in Docker"),
+    "docker/build-push-action": ("needs-docker", "builds images with Docker"),
+    "docker/setup-buildx-action": ("needs-docker", "sets up Docker Buildx"),
+    "docker/setup-qemu-action": ("needs-docker", "sets up QEMU for Docker"),
+    "addnab/docker-run-action": ("needs-docker", "runs a Docker container"),
     "marocchino/sticky-pull-request-comment": ("skip", "comments on the PR"),
 }
 

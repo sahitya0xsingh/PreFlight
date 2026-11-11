@@ -17,6 +17,7 @@ downloads once.
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import platform
@@ -153,6 +154,7 @@ def _version_file(root: Path, name: str | None) -> str | None:
     return text.splitlines()[0].strip().lstrip("v") if text else None
 
 
+@functools.lru_cache(maxsize=64)
 def resolve_node(spec: str) -> str:
     spec = spec.strip().lstrip("v")
     releases = _fetch_json("https://nodejs.org/dist/index.json")
@@ -171,6 +173,7 @@ def resolve_node(spec: str) -> str:
     raise DockerError(f"no Node.js release matches {spec!r}")
 
 
+@functools.lru_cache(maxsize=64)
 def resolve_go(spec: str) -> str:
     spec = spec.strip().lstrip("v^~")
     releases = _fetch_json("https://go.dev/dl/?mode=json&include=all")
@@ -296,10 +299,12 @@ class DockerJob:
             self.image = self.spec["image"]
             self.workspace = f"/__w/{repo_name}/{repo_name}"
             self.temp = "/__w/_temp"
+            self.actions_root = "/__w/_actions"
         else:
             self.image = ensure_runner_image(ubuntu_version(job.runs_on), say)
             self.workspace = f"/home/runner/work/{repo_name}/{repo_name}"
             self.temp = "/home/runner/work/_temp"
+            self.actions_root = "/home/runner/work/_actions"
         self.snapshot = snapshot
         self.ctx = ctx
         self.default_path = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -451,6 +456,19 @@ git update-ref refs/heads/preflight "$commit"
         # stdin sometimes never returns.
         subprocess.run(["docker", "exec", "-u", self._user(), self.name, "sh", "-c", 'printf %s "$1" > "$2"',
                         "sh", content, path], check=True, capture_output=True, timeout=60)
+
+    def copy_dir(self, host_dir: Path, dest: str) -> str:
+        """Copy a host directory (an action's files) to ``dest`` in the container."""
+        flags = ["--no-mac-metadata"] if platform.system() == "Darwin" else []
+        tar = subprocess.run(["tar", "-cf", "-", *flags, "--exclude=.preflight-fetched", "-C", str(host_dir), "."],
+                             capture_output=True, check=True, env={**os.environ, "COPYFILE_DISABLE": "1"}).stdout
+        self.sh(f"mkdir -p {shlex.quote(dest)}")
+        proc = subprocess.run(["docker", "exec", "-i", "-u", self._user(), "-w", dest, self.name, "tar", "-xf", "-"],
+                              input=tar, capture_output=True, timeout=300)
+        if proc.returncode != 0:
+            raise DockerError(f"copying {host_dir.name} into the container failed: "
+                              f"{proc.stderr.decode(errors='replace')[:300]}")
+        return dest
 
     def read_and_clear(self, path: str) -> str:
         q = shlex.quote(path)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 import time
@@ -137,7 +138,7 @@ def build_plan(root: Path, repo: str, base: str, changed: list[str], prof: dict 
         for job in wf.jobs:
             if only and not any(o.lower() in (job.id.lower(), wf.name.lower(), rel.lower()) for o in only):
                 continue
-            workflow.classify(job, host, docker)
+            workflow.classify(job, host, docker, root)
             fails = profile.failure_count(prof, repo, wf.path, job.id)
             combos = workflow.expand_matrix(job.matrix) if not isinstance(job.matrix, str) else [{}]
             if quick:
@@ -182,6 +183,8 @@ def print_plan(plan: Plan) -> None:
         print("\nNot triggered by this change:")
         for name, why in plan.not_triggered:
             print(f"  - {name}: {why}")
+    if plan.docker and os.environ.get("PREFLIGHT_GITHUB_TOKEN"):
+        print("\nJobs get PREFLIGHT_GITHUB_TOKEN as github.token (use a token with no scopes).")
     if plan.other_ci:
         print(f"\nAlso uses {', '.join(plan.other_ci)} (not run locally yet).")
 

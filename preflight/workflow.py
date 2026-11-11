@@ -29,6 +29,7 @@ REUSABLE = "reusable"    # calls a reusable workflow (phase 2)
 NO_CODE = "no-code"      # no run steps: a bot, labeler or upload-only job
 DYNAMIC = "dynamic"      # matrix or runner computed at run time
 PR_META = "pr-metadata"  # reads the PR itself (number, title, body), which exists only on GitHub
+NEEDS_DOCKER = "needs-docker"  # a step starts Docker containers itself
 
 _PR_META_RE = re.compile(
     r"github\.event\.(number|pull_request\.(number|title|body|labels|html_url))|github\.event\.pull_request\b(?!\.(head|base|draft))"
@@ -140,25 +141,7 @@ def parse(text: str, path: str) -> Workflow:
         raw = raw or {}
         strategy = raw.get("strategy") or {}
         needs = raw.get("needs") or []
-        steps = []
-        for i, s in enumerate(raw.get("steps") or []):
-            s = s or {}
-            steps.append(
-                Step(
-                    index=i,
-                    name=str(s.get("name") or s.get("run", "").split("\n")[0][:60] or s.get("uses") or f"step {i + 1}"),
-                    id=s.get("id"),
-                    run=s.get("run"),
-                    uses=s.get("uses"),
-                    with_=dict(s.get("with") or {}),
-                    env=dict(s.get("env") or {}),
-                    if_=s.get("if"),
-                    shell=s.get("shell"),
-                    working_directory=s.get("working-directory"),
-                    continue_on_error=s.get("continue-on-error", False),
-                    timeout_minutes=s.get("timeout-minutes"),
-                )
-            )
+        steps = [step_from_raw(i, st) for i, st in enumerate(raw.get("steps") or [])]
         wf.jobs.append(
             Job(
                 id=str(job_id),
@@ -178,6 +161,24 @@ def parse(text: str, path: str) -> Workflow:
             )
         )
     return wf
+
+
+def step_from_raw(i: int, s: Any) -> Step:
+    s = s or {}
+    return Step(
+        index=i,
+        name=str(s.get("name") or str(s.get("run") or "").split("\n")[0][:60] or s.get("uses") or f"step {i + 1}"),
+        id=s.get("id"),
+        run=s.get("run"),
+        uses=s.get("uses"),
+        with_=dict(s.get("with") or {}),
+        env=dict(s.get("env") or {}),
+        if_=s.get("if"),
+        shell=s.get("shell"),
+        working_directory=s.get("working-directory"),
+        continue_on_error=s.get("continue-on-error", False),
+        timeout_minutes=s.get("timeout-minutes"),
+    )
 
 
 def runner_os(runs_on: Any) -> str | None:
@@ -201,7 +202,7 @@ def runner_os(runs_on: Any) -> str | None:
     return "Linux"
 
 
-def classify(job: Job, host_os: str, docker: bool = False) -> None:
+def classify(job: Job, host_os: str, docker: bool = False, root: Path | None = None) -> None:
     """Set ``job.verdict`` and ``job.reasons`` for a machine running ``host_os``.
 
     With ``docker``, Linux jobs run in containers, so job containers and
@@ -213,7 +214,8 @@ def classify(job: Job, host_os: str, docker: bool = False) -> None:
     if job.uses:
         job.verdict, job.reasons = REUSABLE, [f"calls reusable workflow {job.uses}"]
         return
-    run_steps = [s for s in job.steps if s.run]
+    # Code steps: run steps, plus (in Docker mode) actions that PreFlight runs for real.
+    run_steps = [s for s in job.steps if s.run or (docker and s.uses and actions.classify(s.uses)[0] == "unknown")]
     if not run_steps:
         job.verdict, job.reasons = NO_CODE, ["no run steps"]
         return
@@ -242,6 +244,10 @@ def classify(job: Job, host_os: str, docker: bool = False) -> None:
     if pr_meta:
         job.verdict, job.reasons = PR_META, ["reads the pull request itself (number or description); runs once the PR is open"]
         return
+    for s in job.steps:
+        if s.uses and actions.classify(s.uses)[0] == "needs-docker":
+            job.verdict, job.reasons = NEEDS_DOCKER, [f"step '{s.name}' {actions.classify(s.uses)[1]} inside the job"]
+            return
     secrets |= set(_SECRET_RE.findall(yaml.safe_dump(job.env)))
     secrets.discard("GITHUB_TOKEN")
     if secrets:
@@ -250,12 +256,34 @@ def classify(job: Job, host_os: str, docker: bool = False) -> None:
     for s in job.steps:
         if s.uses:
             kind, detail = actions.classify(s.uses)
-            if kind == "unknown":
-                reasons.append(f"step '{s.name}' skipped: {s.uses} {detail}")
+            if kind == "unknown" and docker:
+                why = _docker_action_gap(s.uses, root)
+                if why:
+                    reasons.append(f"step '{s.name}' skipped: {why}")
+            elif kind == "unknown":
+                reasons.append(f"step '{s.name}' skipped: {s.uses} {detail} (--docker runs it)")
     if os_name == "Linux" and host_os != "Linux":
         reasons.append(f"Linux job run on {host_os}; GNU vs BSD tool differences possible")
     job.verdict = PARTIAL if any("skipped" in r for r in reasons) else RUN
     job.reasons = reasons
+
+
+def _docker_action_gap(uses: str, root: Path | None) -> str | None:
+    """Why Docker mode cannot run this action, or None when it can."""
+    from . import actionfetch  # here to keep workflow parsing free of network code
+    if uses.startswith("docker://"):
+        return f"{uses} is a docker action (not run yet)"
+    if uses.startswith("./") and root is None:
+        return None
+    try:
+        action = actionfetch.resolve(uses, root or Path("."))
+    except (actionfetch.FetchError, OSError) as e:
+        return f"could not read {uses}: {e}"
+    if action.kind in ("node", "composite"):
+        return None
+    if action.kind == "docker":
+        return f"{uses} is a docker container action (not run yet)"
+    return f"{uses} uses '{action.using}', which is not supported"
 
 
 def expand_matrix(matrix: Any) -> list[dict[str, Any]]:

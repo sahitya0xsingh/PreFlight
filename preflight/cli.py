@@ -31,7 +31,7 @@ def cmd_learn(args) -> int:
 def _print_summary(prof: dict) -> None:
     s = learn.summarize(prof)
     print(f"\n{prof['org']}: {s['repos']} repos, {s['pr_jobs']} jobs run on pull requests")
-    order = ["run", "partial", "docker", "other-os", "secrets", "pr-metadata", "reusable", "dynamic", "no-code"]
+    order = ["run", "partial", "docker", "other-os", "secrets", "pr-metadata", "needs-docker", "reusable", "dynamic", "no-code"]
     for v in order:
         if s["verdicts"].get(v):
             print(f"  {v:<9} {s['verdicts'][v]}")

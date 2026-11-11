@@ -30,6 +30,14 @@ preflight install-hook --docker        # the same, before every push
   volumes, so each downloads once.
 - `services:` containers start next to the job and are waited on until healthy. Steps reach them as
   `localhost:<port>` and by service name.
+- Marketplace actions PreFlight does not emulate are run for real: JavaScript actions (with `pre`/`post` steps,
+  inputs, outputs and saved state, on the Node version the action declares), composite actions, and local
+  `uses: ./path` actions, nested to any depth. Each is downloaded once at its pinned ref into `~/.preflight/actions`.
+  Docker container actions (`runs.using: docker`) are skipped for now, and actions that start Docker containers
+  themselves (Qodana, `docker/build-push-action`, …) leave their job to GitHub.
+- Jobs get no GitHub token unless you give one: `PREFLIGHT_GITHUB_TOKEN=<token> preflight check --docker` passes it
+  as `github.token` and `secrets.GITHUB_TOKEN`. Third-party action code runs with it, so use a classic token with
+  **no scopes** (it can read public data, nothing else). PreFlight never reads your `gh` login for this.
 - Jobs run in parallel: by default about one per 2.5 GB of Docker memory, up to 4 (`--jobs N` / `-j N` to change).
   A job starts once every job it `needs` has passed. The first failure stops the running containers and cancels the
   rest, unless you pass `--keep-going`; with it, jobs that need a failed job are reported as not run.
@@ -58,6 +66,7 @@ Every job gets a verdict:
 | `other-os` | needs a Windows (or macOS) runner |
 | `docker` | needs a job container or service containers; runs with `--docker` |
 | `secrets` | needs repository secrets |
+| `needs-docker` | a step starts Docker containers itself (Qodana, `docker/build-push-action`, …) |
 | `pr-metadata` | reads the PR's number or description, so it can only run once the PR exists |
 | `reusable`, `dynamic` | calls a reusable workflow, or computes its matrix or runner at run time (phase 2) |
 | `no-code` | no `run:` steps: bots, labelers, uploads |
@@ -74,7 +83,7 @@ Every job gets a verdict:
 - Parallel jobs share the Maven/Gradle/npm cache volumes, as jobs on one self-hosted runner would. Native mode
   (no `--docker`) always runs one job at a time, because jobs there share your checkout.
 - Only GitHub Actions jobs run. Other CI systems are detected and listed.
-- Unknown marketplace actions are skipped, and the job is marked `partial`.
+- Without `--docker`, marketplace actions PreFlight does not emulate are skipped and the job is marked `partial`.
 
 ## Tests
 

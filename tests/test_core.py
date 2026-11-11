@@ -349,3 +349,77 @@ def test_parallel_needs_and_fail_fast(tmp_path, monkeypatch):
     results = check.execute(plan, root, fail_fast=True, verbose=False, jobs=3)
     assert {r.job_id: r.status for r in results} == {"bad": "failed", "slow": "cancelled"}
     assert __import__("time").time() - t0 < 40  # slow was stopped, not waited for
+
+
+# ------------------------------------------------------------------ real actions
+
+from preflight import actionfetch
+
+
+def test_parse_uses():
+    assert actionfetch.parse_uses("actions/cache/restore@v4") == ("actions", "cache", "restore", "v4")
+    assert actionfetch.parse_uses("o/r@0123") == ("o", "r", "", "0123")
+    with pytest.raises(actionfetch.FetchError):
+        actionfetch.parse_uses("o/r")
+
+
+def test_native_mode_points_unknown_actions_at_docker():
+    wf = workflow.parse(WF, "ci.yml")
+    odd = next(j for j in wf.jobs if j.id == "odd")
+    workflow.classify(odd, "Linux")
+    assert odd.verdict == "partial" and "--docker runs it" in odd.reasons[0]
+
+
+@pytest.mark.skipif(not _docker_ready(), reason="needs Docker and the preflight-runner:24.04 image")
+def test_local_composite_and_node_actions(tmp_path, monkeypatch):
+    monkeypatch.setenv("PREFLIGHT_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("PREFLIGHT_GITHUB_TOKEN", "dummy-token")
+    root = tmp_path / "act"
+    files = {
+        ".github/actions/greet/action.yml": """
+            inputs: {who: {default: world}}
+            outputs: {message: {value: "${{ steps.m.outputs.msg }}"}}
+            runs:
+              using: composite
+              steps:
+                - id: m
+                  shell: bash
+                  run: echo "msg=hello ${{ inputs.who }}" >> "$GITHUB_OUTPUT"
+                - uses: ./.github/actions/js
+                  with: {tag: inner}
+            """,
+        ".github/actions/js/action.yml": "runs: {using: node20, pre: pre.js, main: main.js}\n",
+        ".github/actions/js/pre.js": "require('fs').appendFileSync(process.env.GITHUB_STATE, 'p=' + process.env.INPUT_TAG + '\\n')\n",
+        ".github/actions/js/main.js": textwrap.dedent("""
+            if (process.env.INPUT_TAG === 'boom') { console.log('::error::no boom'); process.exit(3) }
+            if (process.env.STATE_p !== process.env.INPUT_TAG) process.exit(4)
+            console.log('::set-output name=seen::' + process.env.INPUT_TAG)
+            """),
+        ".github/workflows/ci.yml": """
+            on: [pull_request]
+            jobs:
+              ok:
+                runs-on: ubuntu-latest
+                steps:
+                  - {id: g, uses: ./.github/actions/greet, with: {who: dev}}
+                  - {id: j, uses: ./.github/actions/js, with: {tag: top}}
+                  - run: test "${{ steps.g.outputs.message }}/${{ steps.j.outputs.seen }}" = "hello dev/top"
+                  - run: test "${{ github.token }}/${{ secrets.GITHUB_TOKEN }}" = "dummy-token/dummy-token"
+              bad:
+                runs-on: ubuntu-latest
+                steps:
+                  - {uses: ./.github/actions/js, with: {tag: boom}}
+            """,
+    }
+    for rel, text in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(textwrap.dedent(text))
+    _git(root, "init", "-q", "-b", "main")
+    _git(root, "add", ".")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+    plan = check.build_plan(root, "acme/act", "main", ["x"], None, None, quick=False, docker=True)
+    assert all(p.job.verdict == "run" for p in plan.to_run)
+    results = {r.job_id: r for r in check.execute(plan, root, fail_fast=False, verbose=False, jobs=2)}
+    assert results["ok"].status == "passed", results["ok"].steps
+    assert results["bad"].status == "failed"
+    assert "no boom" in results["bad"].failed_step.detail
