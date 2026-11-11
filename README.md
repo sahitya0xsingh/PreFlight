@@ -42,6 +42,9 @@ preflight install-hook --docker        # the same, before every push
   A job starts once every job it `needs` has passed. The first failure stops the running containers and cancels the
   rest, unless you pass `--keep-going`; with it, jobs that need a failed job are reported as not run.
 - Jobs that need Windows or macOS runners, secrets, or the PR itself are still left to GitHub.
+- Each job sees 4 CPUs, like GitHub's standard runner. A job the kernel kills for want of memory is run again on
+  its own; if it still runs out, it is reported as not checked (GitHub's runner has 16 GB) and does not block the push.
+  With `--keep-going`, every failure is confirmed by running it alone, since timing checks can fail from sharing.
 
 ## Accuracy benchmark
 

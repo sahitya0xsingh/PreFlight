@@ -366,7 +366,8 @@ def execute(plan: Plan, root: Path, fail_fast: bool, verbose: bool, snapshot: st
                         _print_log_tail(res.log_path)
                 if res.status == "failed":
                     outcome[key] = "failed"
-                    if fail_fast and not cancel.is_set():
+                    # Out of memory next to other jobs: it is retried alone below, so no cancel yet.
+                    if fail_fast and not cancel.is_set() and not (res.oom and parallel):
                         cancel.set()
                         say("  Stopping at the first failure (--keep-going runs everything).")
                         active.stop_all()
@@ -409,7 +410,8 @@ def _print_log_tail(path: Path | None, lines: int = 25) -> None:
 
 def write_report(plan: Plan, results: list[JobResult], path: Path, root: Path) -> None:
     passed = [r for r in results if r.status == "passed"]
-    failed = [r for r in results if r.status == "failed"]
+    failed = [r for r in results if r.status == "failed" and not r.oom]
+    no_memory = [r for r in results if r.status == "failed" and r.oom]
     cancelled = [r for r in results if r.status == "cancelled"]
     lines = [
         "## PreFlight local CI report",
@@ -418,13 +420,13 @@ def write_report(plan: Plan, results: list[JobResult], path: Path, root: Path) -
         f"{'in Docker (Ubuntu containers)' if plan.docker else 'on ' + host_os()}, "
         f"{time.strftime('%Y-%m-%d %H:%M')}.",
         "",
-        f"**{len(passed)} of {len(results)} job runs passed locally.**",
+        f"**{len(passed)} of {len(results) - len(no_memory)} checked job runs passed locally.**",
         "",
         "| Check | Result |",
         "| --- | --- |",
     ]
     for r in results:
-        lines.append(f"| {r.workflow} / {r.label} | {r.status} |")
+        lines.append(f"| {r.workflow} / {r.label} | {'not checked (out of memory)' if r.oom else r.status} |")
     if plan.skipped:
         lines += ["", "Not run locally (left to GitHub):", ""]
         lines += [f"- {p.wf.name} / {p.job.id}: {p.reason}" for p in plan.skipped]

@@ -85,9 +85,15 @@ def cmd_check(args) -> int:
                             jobs=args.jobs or (docker.default_parallel() if args.docker else 1))
     report = Path(gitinfo.git(root, "rev-parse", "--absolute-git-dir")) / "preflight-report.md"
     check.write_report(plan, results, report, root)
-    failed = [r for r in results if r.status == "failed"]
+    # Killed for memory even alone: this machine cannot judge it; GitHub's runner has 16 GB.
+    no_memory = [r for r in results if r.status == "failed" and r.oom]
+    failed = [r for r in results if r.status == "failed" and not r.oom]
     cancelled = [r for r in results if r.status == "cancelled"]
     print()
+    if no_memory:
+        print(f"! {len(no_memory)} job run(s) ran out of Docker memory even alone, so they were not checked here "
+              f"(GitHub will run them; more Docker memory lets them run): "
+              + ", ".join(f"{r.workflow} / {r.label}" for r in no_memory))
     if failed or cancelled:
         extra = f" ({len(cancelled)} cancelled after it)" if cancelled else ""
         print(f"✗ {len(failed)} of {len(results)} job runs failed{extra}. Fix them before pushing.")
@@ -96,7 +102,8 @@ def cmd_check(args) -> int:
         return 1
     ran = sum(len(p.combos) for p in plan.to_run)
     note = "" if len(results) == ran else f" ({ran - len(results)} not run)"
-    print(f"✓ All {len(results)} job runs passed locally{note}. "
+    checked = len(results) - len(no_memory)
+    print(f"✓ All {checked} checked job runs passed locally{note}. "
           f"{len(plan.skipped)} jobs are left to GitHub.")
     print(f"  Report for your PR description: {report}")
     return 0
