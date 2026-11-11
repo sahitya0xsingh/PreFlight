@@ -302,11 +302,22 @@ def done_shas(results: Path) -> set[str]:
     return {json.loads(line)["sha"] for line in results.read_text().splitlines() if line.strip()}
 
 
+def drop_disagreements(results: Path) -> int:
+    """Forget every case with a disagreement, so the next run replays it."""
+    rows = [json.loads(line) for line in results.read_text().splitlines() if line.strip()]
+    bad = {r["sha"] for r in rows if r["local"] in ("passed", "failed") and r["github"] in CONCLUSIVE
+           and not _agrees(r)}
+    results.write_text("".join(json.dumps(r) + "\n" for r in rows if r["sha"] not in bad))
+    return len(bad)
+
+
 def run(repo: str, count: int, failing_share: float, per_case: int, max_minutes: float, jobs: int,
-        only: list[str] | None, seed: int, base_branch: str | None) -> Path:
+        only: list[str] | None, seed: int, base_branch: str | None, rerun_disagreements: bool = False) -> Path:
     d = bench_dir(repo)
     d.mkdir(parents=True, exist_ok=True)
     results = d / "results.jsonl"
+    if rerun_disagreements and results.exists():
+        print(f"Replaying {drop_disagreements(results)} cases with a disagreement.", flush=True)
     finished = done_shas(results)
     cases_file = d / "cases.json"
     if cases_file.exists():

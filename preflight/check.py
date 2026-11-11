@@ -373,9 +373,13 @@ def execute(plan: Plan, root: Path, fail_fast: bool, verbose: bool, snapshot: st
                 job_done(key)
     # A job that ran out of memory next to others gets one more try on its own:
     # GitHub gives every job a whole machine.
-    retry = [(i, r) for i, r in results if r.oom and parallel and not (fail_fast and cancel.is_set())]
+    # With --keep-going every failure is confirmed alone: timing checks and tight
+    # timeouts can fail just from sharing the machine.
+    retry = [(i, r) for i, r in results if parallel and r.status == "failed" and (r.oom or not fail_fast)
+             and not (fail_fast and cancel.is_set())]
     if retry:
-        say(f"  {len(retry)} job run(s) ran out of Docker memory while others ran; retrying one at a time.")
+        why = "ran out of Docker memory" if all(r.oom for _, r in retry) else "failed"
+        say(f"  {len(retry)} job run(s) {why} while others ran; running them again one at a time to confirm.")
         units = dict(enumerate(order_index_units))
         for i, old in retry:
             p, combo = units[i]

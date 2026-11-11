@@ -118,7 +118,8 @@ def cmd_bench(args) -> int:
             raise SystemExit("preflight: bench runs jobs in Docker; `docker info` failed")
         try:
             bench.run(repo, args.cases, args.failing, args.per_case, args.max_minutes,
-                      args.jobs or docker.default_parallel(), args.only, args.seed, args.base)
+                      args.jobs or docker.default_parallel(), args.only, args.seed, args.base,
+                      args.rerun_disagreements)
         except github.GitHubError as e:
             print(f"preflight: {e}", file=sys.stderr)
             return 2
@@ -197,6 +198,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--base", help="base branch (default: the repo's default branch)")
     s.add_argument("--report", action="store_true", help="only print the report from results so far")
     s.add_argument("--reset", action="store_true", help="forget earlier cases and results")
+    s.add_argument("--rerun-disagreements", action="store_true",
+                   help="replay the cases that disagreed with GitHub (after a fix)")
     s.set_defaults(fn=cmd_bench)
 
     s = sub.add_parser("install-hook", help="run `preflight check` before every git push")
