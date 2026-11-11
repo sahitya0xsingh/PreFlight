@@ -18,6 +18,7 @@ downloads once.
 from __future__ import annotations
 
 import functools
+import itertools
 import json
 import os
 import posixpath
@@ -49,6 +50,7 @@ ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
 RUN apt-get update && apt-get install -y --no-install-recommends \\
       sudo git curl wget ca-certificates gnupg xz-utils unzip zip jq file \\
       build-essential python3 python3-venv python3-pip locales tzdata openssh-client \\
+      bc rsync time zstd parallel shellcheck xmlstarlet libxml2-utils dnsutils iputils-ping netcat-openbsd \\
  && (id -u ubuntu >/dev/null 2>&1 && userdel -r ubuntu || true) \\
  && useradd -m -u 1001 -s /bin/bash runner \\
  && echo 'runner ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/runner \\
@@ -65,7 +67,7 @@ USER runner
 ENV RUNNER_TOOL_CACHE={toolcache} AGENT_TOOLSDIRECTORY={toolcache} HOME=/home/runner
 WORKDIR /home/runner
 """
-RECIPE = "3"  # bump when DOCKERFILE changes so old images are rebuilt
+RECIPE = "4"  # bump when DOCKERFILE changes so old images are rebuilt
 
 
 class DockerError(RuntimeError):
@@ -315,7 +317,7 @@ class DockerJob:
     # -- lifecycle
 
     def start(self) -> None:
-        args = ["run", "-d", "--name", self.name, "--label", "org.preflight=1"]
+        args = ["run", "-d", "--name", self.name, "--label", "org.preflight=1", *_runner_cpus()]
         for svc in (self.job.services or {}):
             args += ["--add-host", f"{svc}:127.0.0.1"]
         if self.spec:
@@ -515,6 +517,35 @@ git update-ref refs/heads/preflight "$commit"
                 k, v = line.split("=", 1)
                 env[k] = v
         return True, f"installed {what}", env, paths
+
+
+RUNNER_CPUS = 4   # GitHub's standard Linux runner for public repos: 4 CPUs, 16 GB
+
+
+_CPU_TURN = itertools.count()
+
+
+@functools.lru_cache(maxsize=1)
+def _host_cpus() -> int:
+    try:
+        return int(_docker("info", "--format", "{{.NCPU}}", timeout=30).strip())
+    except (DockerError, ValueError, subprocess.SubprocessError):
+        return 0
+
+
+def _runner_cpus() -> list[str]:
+    """Show each job the CPU count of a GitHub runner.
+
+    Builds size themselves from the CPU count (Gradle forks, Maven threads, JVM
+    GC threads). With all of a big machine's cores they start more workers than
+    on GitHub and can run out of memory that GitHub never would. Parallel jobs
+    get different cores where there are enough.
+    """
+    n = _host_cpus()
+    if n <= RUNNER_CPUS:
+        return []
+    start = next(_CPU_TURN) * RUNNER_CPUS
+    return ["--cpuset-cpus=" + ",".join(str((start + i) % n) for i in range(RUNNER_CPUS))]
 
 
 def _service_options(options: str) -> list[str]:
