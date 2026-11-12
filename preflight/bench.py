@@ -216,7 +216,14 @@ class Row:
 
 
 def run_case(repo: str, root: Path, case: Case, base_branch: str, per_case: int, max_minutes: float,
-             jobs: int, only: list[str] | None, seed: int) -> list[Row]:
+             jobs: int, only: list[str] | None, seed: int, want: set[tuple[str, str]] | None = None) -> list[Row]:
+    """Replay one case. ``want`` = (workflow file, GitHub job name): run just those, report just those."""
+    rows = _run_case(repo, root, case, base_branch, per_case, max_minutes, jobs, only, seed, want)
+    return [r for r in rows if want is None or (r.workflow, r.job) in want]
+
+
+def _run_case(repo: str, root: Path, case: Case, base_branch: str, per_case: int, max_minutes: float,
+              jobs: int, only: list[str] | None, seed: int, want: set[tuple[str, str]] | None) -> list[Row]:
     base, built = prepare(root, case, base_branch)
     changed = gitinfo.changed_files(root, base, include_worktree=False)
     prof = profile.load(repo.split("/")[0])
@@ -265,7 +272,10 @@ def run_case(repo: str, root: Path, case: Case, base_branch: str, per_case: int,
     fails = [c for c in candidates if c[2].conclusion == "failure"]
     passes = [c for c in candidates if c[2].conclusion == "success"]
     rng.shuffle(passes)
-    picked = fails + passes[:max(0, per_case - len(fails))] if per_case else candidates
+    if want is not None:
+        picked = [c for c in candidates if (Path(c[0].wf.path).name, c[2].name) in want]
+    else:
+        picked = fails + passes[:max(0, per_case - len(fails))] if per_case else candidates
     for c in candidates:
         if c not in picked:
             rows.append(row(Path(c[0].wf.path).name, c[2], "", "not-sampled", "not in this case's sample"))
@@ -420,3 +430,84 @@ def report(repo: str, target: float = 0.95) -> str:
         lines += ["", "## Not run locally", "", "| Why | GitHub job runs |", "| --- | --- |"]
         lines += [f"| {k} | {v} |" for k, v in sorted(left.items(), key=lambda kv: -kv[1])]
     return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------- fast follow-ups
+
+def _load_cases(d: Path) -> list[Case]:
+    f = d / "cases.json"
+    if not f.exists():
+        return []
+    return [Case(**{**c, "jobs": [GhJob(**j) for j in c["jobs"]]}) for c in json.loads(f.read_text())]
+
+
+def _rows(results: Path) -> list[dict]:
+    return [json.loads(line) for line in results.read_text().splitlines() if line.strip()] if results.exists() else []
+
+
+def replay_disagreements(repo: str, jobs: int, base_branch: str) -> None:
+    """Run again only the job runs that disagreed, replacing their rows."""
+    d = bench_dir(repo)
+    results = d / "results.jsonl"
+    rows = _rows(results)
+    bad = [r for r in rows if r["local"] in ("passed", "failed") and r["github"] in CONCLUSIVE and not _agrees(r)]
+    cases = {c.sha: c for c in _load_cases(d)}
+    root = ensure_clone(repo)
+    new: list[dict] = []
+    for sha in dict.fromkeys(r["sha"] for r in bad):
+        want = {(r["workflow"], r["job"]) for r in bad if r["sha"] == sha}
+        print(f"\nReplaying {len(want)} job run(s) of {sha[:10]}", flush=True)
+        new += [asdict(r) for r in run_case(repo, root, cases[sha], base_branch, 0, 0, jobs, None, 1, want)]
+    redone = {(r["sha"], r["workflow"], r["job"]) for r in new}
+    kept = [r for r in rows if (r["sha"], r["workflow"], r["job"]) not in redone]
+    results.write_text("".join(json.dumps(r) + "\n" for r in kept + new))
+
+
+def add_failures(repo: str, count: int, max_minutes: float, jobs: int, base_branch: str, pages: int = 10) -> None:
+    """Add PR commits with a failed job that PreFlight can run, and run only those failed jobs.
+
+    Workflows the results so far show are left to GitHub are not searched.
+    """
+    d = bench_dir(repo)
+    results = d / "results.jsonl"
+    rows = _rows(results)
+    left = {r["workflow"] for r in rows if r["local"] in ("left-to-github", "needs-token", "needs-memory")}
+    runnable = {r["workflow"] for r in rows if r["local"] in ("passed", "failed")}
+    known = {r["sha"] for r in rows}
+    cases = _load_cases(d)
+    root = ensure_clone(repo)
+    found = 0
+    for page in range(1, pages + 1):
+        data = github.api(f"repos/{repo}/actions/runs?event=pull_request&status=failure&per_page=100&page={page}")
+        for run in data.get("workflow_runs", []):
+            wf = Path(run["path"]).name
+            if found >= count or run["head_sha"] in known or wf in left or wf not in runnable:
+                continue
+            gh = [GhJob(wf, j["name"], j.get("conclusion") or "", _seconds(j), j.get("html_url", ""))
+                  for j in github.paginate(f"repos/{repo}/actions/runs/{run['id']}/jobs?filter=latest", key="jobs")]
+            failed = [g for g in gh if g.conclusion == "failure" and (not max_minutes or g.seconds <= max_minutes * 60)]
+            if not failed:
+                continue
+            case = Case(sha=run["head_sha"], title=run.get("display_title", ""), created_at=run["created_at"],
+                        failed=True, workflows=[wf], jobs=gh)
+            known.add(case.sha)
+            print(f"\n[failure {found + 1}/{count}] {case.sha[:10]} {wf}: "
+                  f"{', '.join(g.name for g in failed)} — {case.title[:60]}", flush=True)
+            try:
+                got = run_case(repo, root, case, base_branch, 0, 0, jobs, None, 1, {(wf, g.name) for g in failed})
+            except (gitinfo.GitError, subprocess.CalledProcessError) as e:
+                print(f"  skipped: {str(e)[:200]}", flush=True)
+                continue
+            if not any(r.local in ("passed", "failed") for r in got):
+                print("  nothing comparable (job left to GitHub or not matched)", flush=True)
+                continue
+            found += 1
+            cases.append(case)
+            (d / "cases.json").write_text(json.dumps([asdict(c) for c in cases], indent=1))
+            with results.open("a") as f:
+                for r in got:
+                    f.write(json.dumps(asdict(r)) + "\n")
+            ok = sum(_agrees(r) for r in got)
+            print(f"  {ok}/{len(got)} agree", flush=True)
+        if found >= count:
+            break

@@ -31,7 +31,7 @@ def cmd_learn(args) -> int:
 def _print_summary(prof: dict) -> None:
     s = learn.summarize(prof)
     print(f"\n{prof['org']}: {s['repos']} repos, {s['pr_jobs']} jobs run on pull requests")
-    order = ["run", "partial", "docker", "other-os", "secrets", "pr-metadata", "needs-docker", "reusable", "dynamic", "no-code"]
+    order = ["run", "partial", "docker", "other-os", "secrets", "pr-metadata", "needs-docker", "timing", "reusable", "dynamic", "no-code"]
     for v in order:
         if s["verdicts"].get(v):
             print(f"  {v:<9} {s['verdicts'][v]}")
@@ -124,9 +124,17 @@ def cmd_bench(args) -> int:
         if not docker.available():
             raise SystemExit("preflight: bench runs jobs in Docker; `docker info` failed")
         try:
-            bench.run(repo, args.cases, args.failing, args.per_case, args.max_minutes,
-                      args.jobs or docker.default_parallel(), args.only, args.seed, args.base,
-                      args.rerun_disagreements)
+            if args.replay or args.add_failures:
+                branch = args.base or github.api(f"repos/{repo}")["default_branch"]
+                n = args.jobs or docker.default_parallel()
+                if args.replay:
+                    bench.replay_disagreements(repo, n, branch)
+                if args.add_failures:
+                    bench.add_failures(repo, args.add_failures, args.max_minutes, n, branch)
+            else:
+                bench.run(repo, args.cases, args.failing, args.per_case, args.max_minutes,
+                          args.jobs or docker.default_parallel(), args.only, args.seed, args.base,
+                          args.rerun_disagreements)
         except github.GitHubError as e:
             print(f"preflight: {e}", file=sys.stderr)
             return 2
@@ -205,6 +213,9 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--base", help="base branch (default: the repo's default branch)")
     s.add_argument("--report", action="store_true", help="only print the report from results so far")
     s.add_argument("--reset", action="store_true", help="forget earlier cases and results")
+    s.add_argument("--replay", action="store_true", help="run again only the job runs that disagreed")
+    s.add_argument("--add-failures", type=int, metavar="N",
+                   help="add N PR commits with a failed job PreFlight can run, running only those jobs")
     s.add_argument("--rerun-disagreements", action="store_true",
                    help="replay the cases that disagreed with GitHub (after a fix)")
     s.set_defaults(fn=cmd_bench)

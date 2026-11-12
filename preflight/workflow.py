@@ -30,6 +30,7 @@ NO_CODE = "no-code"      # no run steps: a bot, labeler or upload-only job
 DYNAMIC = "dynamic"      # matrix or runner computed at run time
 PR_META = "pr-metadata"  # reads the PR itself (number, title, body), which exists only on GitHub
 NEEDS_DOCKER = "needs-docker"  # a step starts Docker containers itself
+TIMING = "timing"        # measures run time: a local machine cannot reproduce GitHub's timing
 
 _PR_META_RE = re.compile(
     r"github\.event\.(number|pull_request\.(number|title|body|labels|html_url))|github\.event\.pull_request\b(?!\.(head|base|draft))"
@@ -202,6 +203,9 @@ def runner_os(runs_on: Any) -> str | None:
     return "Linux"
 
 
+_TIMING_RE = re.compile(r"perf(ormance)?[ _-]?(test|regression|check)|benchmark", re.I)
+
+
 def classify(job: Job, host_os: str, docker: bool = False, root: Path | None = None) -> None:
     """Set ``job.verdict`` and ``job.reasons`` for a machine running ``host_os``.
 
@@ -221,6 +225,10 @@ def classify(job: Job, host_os: str, docker: bool = False, root: Path | None = N
         return
     if isinstance(job.matrix, str):
         job.verdict, job.reasons = DYNAMIC, ["matrix is computed at run time"]
+        return
+    timed = next((n for n in [job.name] + [s.name for s in job.steps] if _TIMING_RE.search(n or "")), None)
+    if timed:
+        job.verdict, job.reasons = TIMING, [f"'{timed}' measures run time, which depends on the machine"]
         return
     os_name = runner_os(job.runs_on)
     if os_name is None:

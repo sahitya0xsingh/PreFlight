@@ -531,3 +531,17 @@ def test_oom_kill_is_detected_and_workspace_parent_is_writable(repo, tmp_path):
         assert res.status == "passed", (tmp_path / "o.log").read_text()
         assert box.oom_kills() == 0
     dockermod.clear_snapshot_cache()
+
+
+def test_timing_jobs_are_left_to_github():
+    job = workflow.parse(textwrap.dedent("""
+        on: pull_request
+        jobs:
+          test:
+            runs-on: ubuntu-latest
+            steps:
+              - name: Run performance test
+                run: ./perf.sh
+    """), "p.yml").jobs[0]
+    workflow.classify(job, "Linux", docker=True)
+    assert job.verdict == workflow.TIMING
