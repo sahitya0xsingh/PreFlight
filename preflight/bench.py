@@ -456,14 +456,13 @@ def replay_disagreements(repo: str, jobs: int, base_branch: str) -> None:
     bad = [r for r in rows if r["local"] in ("passed", "failed") and r["github"] in CONCLUSIVE and not _agrees(r)]
     cases = {c.sha: c for c in _load_cases(d)}
     root = ensure_clone(repo)
-    new: list[dict] = []
     for sha in dict.fromkeys(r["sha"] for r in bad):
         want = {(r["workflow"], r["job"]) for r in bad if r["sha"] == sha}
         print(f"\nReplaying {len(want)} job run(s) of {sha[:10]}", flush=True)
-        new += [asdict(r) for r in run_case(repo, root, cases[sha], base_branch, 0, 0, jobs, None, 1, want)]
-    redone = {(r["sha"], r["workflow"], r["job"]) for r in new}
-    kept = [r for r in rows if (r["sha"], r["workflow"], r["job"]) not in redone]
-    results.write_text("".join(json.dumps(r) + "\n" for r in kept + new))
+        new = [asdict(r) for r in run_case(repo, root, cases[sha], base_branch, 0, 0, jobs, None, 1, want)]
+        redone = {(r["sha"], r["workflow"], r["job"]) for r in new}
+        rows = [r for r in rows if (r["sha"], r["workflow"], r["job"]) not in redone] + new
+        results.write_text("".join(json.dumps(r) + "\n" for r in rows))   # saved per case: safe to stop
 
 
 def add_failures(repo: str, count: int, max_minutes: float, jobs: int, base_branch: str, pages: int = 10) -> None:
