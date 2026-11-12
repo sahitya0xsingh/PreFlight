@@ -510,7 +510,7 @@ def replay_disagreements(repo: str, jobs: int, base_branch: str) -> None:
         results.write_text("".join(json.dumps(r) + "\n" for r in rows))   # saved per case: safe to stop
 
 
-def add_failures(repo: str, count: int, max_minutes: float, jobs: int, base_branch: str, pages: int = 10) -> None:
+def add_failures(repo: str, count: int, max_minutes: float, jobs: int, base_branch: str, pages: int = 40) -> None:
     """Add PR commits with a failed job that PreFlight can run, and run only those failed jobs.
 
     Workflows the results so far show are left to GitHub are not searched.
