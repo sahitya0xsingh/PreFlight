@@ -63,6 +63,23 @@ The report gives agreement overall and split by GitHub's result, missed failures
 GitHub), false alarms, coverage (GitHub jobs PreFlight can run) and trigger accuracy, and lists every
 disagreement with GitHub's job link and the local failing step.
 
+```bash
+preflight bench --repo checkstyle/checkstyle --add-failures 8   # add PRs whose code failed a job PreFlight can run
+preflight bench --repo checkstyle/checkstyle --replay           # after a fix: run only the disagreeing job runs again
+preflight bench --repo checkstyle/checkstyle --replan           # after a verdict change: re-plan saved cases, no jobs run
+```
+
+Some results are kept out of the agreement figure and listed on their own, so they neither help nor hurt it:
+
+- **GitHub infrastructure failures**: a job that passed here, where GitHub's own log shows its runner failed (a
+  download that returned HTTP 5xx, a dependency that could not be fetched, a machine-setup step such as
+  "Install Groovy" failing before the check ran). The code was not what failed.
+- **needs-token**: an action GitHub's API refused for want of a token (set `PREFLIGHT_GITHUB_TOKEN`).
+- **needs-memory**: killed for memory even with the job running alone (GitHub's runner has 16 GB).
+
+`--add-failures` skips GitHub failures of these kinds before running anything, so the jobs it adds failed on
+the code.
+
 ## What it does
 
 - **learn**: reads every repo's `.github/workflows`, finds other CI systems (Azure Pipelines, CircleCI, …),
