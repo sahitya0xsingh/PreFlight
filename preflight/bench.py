@@ -450,6 +450,9 @@ def replay_disagreements(repo: str, jobs: int, base_branch: str) -> None:
     d = bench_dir(repo)
     results = d / "results.jsonl"
     rows = _rows(results)
+    for r in rows:   # killed for memory even alone: replaying it would only run out again
+        if r["local"] == "failed" and r.get("log") and _oom_log(r["log"]):
+            r["local"] = "needs-memory"
     bad = [r for r in rows if r["local"] in ("passed", "failed") and r["github"] in CONCLUSIVE and not _agrees(r)]
     cases = {c.sha: c for c in _load_cases(d)}
     root = ensure_clone(repo)
