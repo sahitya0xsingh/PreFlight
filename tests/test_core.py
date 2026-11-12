@@ -545,3 +545,18 @@ def test_timing_jobs_are_left_to_github():
     """), "p.yml").jobs[0]
     workflow.classify(job, "Linux", docker=True)
     assert job.verdict == workflow.TIMING
+
+
+def test_job_using_outputs_of_a_skipped_step_is_incomplete():
+    job = workflow.parse(textwrap.dedent("""
+        on: pull_request
+        jobs:
+          j:
+            runs-on: ubuntu-latest
+            steps:
+              - id: links
+                uses: some/unknown-action@v1
+              - run: echo ${{ steps.links.outputs.issues }}
+    """), "p.yml").jobs[0]
+    workflow.classify(job, "Linux", docker=False)
+    assert job.verdict == workflow.INCOMPLETE

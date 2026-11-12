@@ -31,7 +31,7 @@ def cmd_learn(args) -> int:
 def _print_summary(prof: dict) -> None:
     s = learn.summarize(prof)
     print(f"\n{prof['org']}: {s['repos']} repos, {s['pr_jobs']} jobs run on pull requests")
-    order = ["run", "partial", "docker", "other-os", "secrets", "pr-metadata", "needs-docker", "timing", "reusable", "dynamic", "no-code"]
+    order = ["run", "partial", "docker", "other-os", "secrets", "pr-metadata", "needs-docker", "timing", "incomplete", "reusable", "dynamic", "no-code"]
     for v in order:
         if s["verdicts"].get(v):
             print(f"  {v:<9} {s['verdicts'][v]}")
@@ -124,7 +124,10 @@ def cmd_bench(args) -> int:
         if not docker.available():
             raise SystemExit("preflight: bench runs jobs in Docker; `docker info` failed")
         try:
-            if args.replay or args.add_failures:
+            if args.replan:
+                branch = args.base or github.api(f"repos/{repo}")["default_branch"]
+                print(f"Re-planned saved cases: {bench.replan(repo, branch)} job runs are now left to GitHub.")
+            elif args.replay or args.add_failures:
                 branch = args.base or github.api(f"repos/{repo}")["default_branch"]
                 n = args.jobs or docker.default_parallel()
                 if args.replay:
@@ -213,6 +216,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--base", help="base branch (default: the repo's default branch)")
     s.add_argument("--report", action="store_true", help="only print the report from results so far")
     s.add_argument("--reset", action="store_true", help="forget earlier cases and results")
+    s.add_argument("--replan", action="store_true",
+                   help="re-plan saved cases with this PreFlight (no jobs run); jobs now left to GitHub leave the comparison")
     s.add_argument("--replay", action="store_true", help="run again only the job runs that disagreed")
     s.add_argument("--add-failures", type=int, metavar="N",
                    help="add N PR commits with a failed job PreFlight can run, running only those jobs")

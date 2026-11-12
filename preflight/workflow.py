@@ -30,6 +30,7 @@ NO_CODE = "no-code"      # no run steps: a bot, labeler or upload-only job
 DYNAMIC = "dynamic"      # matrix or runner computed at run time
 PR_META = "pr-metadata"  # reads the PR itself (number, title, body), which exists only on GitHub
 NEEDS_DOCKER = "needs-docker"  # a step starts Docker containers itself
+INCOMPLETE = "incomplete"  # a step whose outputs later steps use cannot run here
 TIMING = "timing"        # measures run time: a local machine cannot reproduce GitHub's timing
 
 _PR_META_RE = re.compile(
@@ -261,6 +262,7 @@ def classify(job: Job, host_os: str, docker: bool = False, root: Path | None = N
     if secrets:
         job.verdict, job.reasons = SECRETS, ["needs secrets: " + ", ".join(sorted(secrets))]
         return
+    skipped_ids: dict[str, str] = {}
     for s in job.steps:
         if s.uses:
             kind, detail = actions.classify(s.uses)
@@ -268,8 +270,21 @@ def classify(job: Job, host_os: str, docker: bool = False, root: Path | None = N
                 why = _docker_action_gap(s.uses, root)
                 if why:
                     reasons.append(f"step '{s.name}' skipped: {why}")
+                    if s.id:
+                        skipped_ids[s.id] = s.name
             elif kind == "unknown":
                 reasons.append(f"step '{s.name}' skipped: {s.uses} {detail} (--docker runs it)")
+                if s.id:
+                    skipped_ids[s.id] = s.name
+    # A later step reads a skipped step's outputs: the job would check against
+    # nothing, so a local pass means nothing.
+    for s in job.steps:
+        blob = yaml.safe_dump({"run": s.run, "with": s.with_, "env": s.env, "if": s.if_})
+        used = next((i for i in skipped_ids if re.search(rf"steps\.{re.escape(i)}\.outputs", blob)), None)
+        if used:
+            job.verdict = INCOMPLETE
+            job.reasons = [f"step '{s.name}' uses the outputs of '{skipped_ids[used]}', which cannot run here"]
+            return
     if os_name == "Linux" and host_os != "Linux":
         reasons.append(f"Linux job run on {host_os}; GNU vs BSD tool differences possible")
     job.verdict = PARTIAL if any("skipped" in r for r in reasons) else RUN

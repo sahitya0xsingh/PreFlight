@@ -562,3 +562,36 @@ def add_failures(repo: str, count: int, max_minutes: float, jobs: int, base_bran
             print(f"  {ok}/{len(got)} agree", flush=True)
         if found >= count:
             break
+
+
+def replan(repo: str, base_branch: str) -> int:
+    """Re-plan every saved case with the current PreFlight (no jobs run).
+
+    Rows for jobs it now leaves to GitHub become left-to-github, so a verdict
+    change is measured on old results too. Returns how many rows changed.
+    """
+    d = bench_dir(repo)
+    results = d / "results.jsonl"
+    rows = _rows(results)
+    root = ensure_clone(repo)
+    prof = profile.load(repo.split("/")[0])
+    changed = 0
+    for case in _load_cases(d):
+        mine = [r for r in rows if r["sha"] == case.sha and r["local"] in ("passed", "failed", "needs-token", "needs-memory")]
+        if not mine:
+            continue
+        base, _ = prepare(root, case, base_branch)
+        plan = check.build_plan(root, repo, f"origin/{base_branch}", gitinfo.changed_files(root, base, False),
+                                prof, None, quick=False, docker=True)
+        left = {}
+        for p in plan.jobs:
+            if p.status != "will-run":
+                for combo in p.combos:
+                    left[(Path(p.wf.path).name, github_name(p.job, combo))] = p.reason
+        for r in mine:
+            why = left.get((r["workflow"], r["job"]))
+            if why:
+                r["local"], r["reason"] = "left-to-github", why
+                changed += 1
+    results.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    return changed

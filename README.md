@@ -87,6 +87,7 @@ Every job gets a verdict:
 | `docker` | needs a job container or service containers; runs with `--docker` |
 | `secrets` | needs repository secrets |
 | `needs-docker` | a step starts Docker containers itself (Qodana, `docker/build-push-action`, …) |
+| `incomplete` | a step that cannot run here (a Docker container action, …) produces outputs later steps check against |
 | `timing` | measures run time (performance regression, benchmarks); a laptop cannot reproduce GitHub's timing |
 | `pr-metadata` | reads the PR's number or description, so it can only run once the PR exists |
 | `reusable`, `dynamic` | calls a reusable workflow, or computes its matrix or runner at run time (phase 2) |
