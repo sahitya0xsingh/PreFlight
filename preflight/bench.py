@@ -381,6 +381,7 @@ def _oom_log(path: str) -> bool:
 # something, not the code failing.
 _GH_INFRA = re.compile(
     r"unresolved dependency|Could not resolve (dependencies|artifact)|Could not transfer artifact|"
+    r"Could not find artifact|or one of its dependencies could not be resolved|Error grabbing Grapes|"
     r"returned error: 5\d\d|HTTP (Error )?5\d\d|Connection (reset|refused|timed out)|Read timed out|"
     r"Temporary failure in name resolution|Failed to connect to|No space left on device|"
     r"The runner has received a shutdown signal|lost communication with the server",
