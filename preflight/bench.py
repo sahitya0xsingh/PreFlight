@@ -388,11 +388,22 @@ _GH_INFRA = re.compile(
     re.I)
 
 
+_SETUP_STEP = re.compile(r"\s*(set ?up|install|download|checkout|cache|restore|clone)\b", re.I)
+
+
 def _github_infra(repo: str, url: str, cache: dict[str, str]) -> str:
     """The infrastructure error in GitHub's log for this job, or ""."""
     if url in cache:
         return cache[url]
     job_id = url.rstrip("/").rsplit("/", 1)[-1]
+    try:
+        steps = (github.api(f"repos/{repo}/actions/jobs/{job_id}") or {}).get("steps") or []
+    except github.GitHubError:
+        steps = []
+    first = next((st["name"] for st in steps if st.get("conclusion") == "failure"), "")
+    if _SETUP_STEP.match(first):
+        cache[url] = f"GitHub's machine-setup step '{first}' failed, before the check ran"
+        return cache[url]
     try:
         log = github.api(f"repos/{repo}/actions/jobs/{job_id}/logs", raw=True) or ""
     except github.GitHubError:
