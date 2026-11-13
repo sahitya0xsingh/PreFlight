@@ -23,7 +23,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import check, expr, github, gitinfo, profile
+from . import check, docker, expr, github, gitinfo, profile
 from .runner import job_label
 
 CONCLUSIVE = ("success", "failure")
@@ -280,6 +280,7 @@ def run_case(repo: str, root: Path, case: Case, base_branch: str, per_case: int,
 def _run_case(repo: str, root: Path, case: Case, base_branch: str, per_case: int, max_minutes: float,
               jobs: int, only: list[str] | None, seed: int, want: set[tuple[str, str]] | None) -> list[Row]:
     base_branch = case.base or base_branch
+    docker.AS_OF = case.created_at[:10]   # "26.x" means the newest 26 release on the PR's date
     base, built = prepare(root, case, base_branch)
     changed = gitinfo.changed_files(root, base, include_worktree=False)
     prof = profile.load(repo.split("/")[0])

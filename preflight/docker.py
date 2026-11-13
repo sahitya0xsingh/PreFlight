@@ -165,10 +165,21 @@ def _version_file(root: Path, name: str | None) -> str | None:
     return text.splitlines()[0].strip().lstrip("v") if text else None
 
 
-@functools.lru_cache(maxsize=64)
+# Resolve version ranges ("26.x", "lts/*") as of this date (YYYY-MM-DD) instead of today.
+# The benchmark sets it to the PR's CI date, so a replay installs what GitHub installed then.
+AS_OF: str | None = None
+
+
 def resolve_node(spec: str) -> str:
+    return _resolve_node(spec, AS_OF)
+
+
+@functools.lru_cache(maxsize=64)
+def _resolve_node(spec: str, as_of: str | None) -> str:
     spec = spec.strip().lstrip("v")
     releases = _fetch_json("https://nodejs.org/dist/index.json")
+    if as_of:
+        releases = [r for r in releases if r.get("date", "") <= as_of]
     if spec in ("latest", "current", "node", "*"):
         return releases[0]["version"].lstrip("v")
     if spec.startswith("lts"):
@@ -368,6 +379,11 @@ class DockerJob:
         path = self.sh_out("echo $PATH").strip()
         if path:
             self.default_path = path
+        if not self.spec:
+            # GitHub's Ubuntu runners map `localhost` to 127.0.0.1 only; Docker also maps it to ::1, so a
+            # server bound to "localhost" would listen on IPv6 while clients dial 127.0.0.1.
+            self.sh("sed 's/^::1[[:space:]]*localhost[[:space:]]/::1 /' /etc/hosts > /tmp/.hosts && cat /tmp/.hosts > /etc/hosts",
+                    root=True, check=False)
         self.sh(f"mkdir -p {shlex.quote(self.workspace)} {self.temp}/_runner_file_commands", root=True)
         # The runner owns the workspace and its parent (work/<repo>), as on GitHub: some scripts
         # put a second worktree next to the checkout.

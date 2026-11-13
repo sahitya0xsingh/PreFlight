@@ -637,3 +637,25 @@ jobs:
     plan = check.build_plan(tmp_path, "o/r", "main", [".github/workflows/ci.yml"], None, None, quick=False, docker=True)
     results = check.execute(plan, tmp_path, fail_fast=True, verbose=False, snapshot="head", jobs=2)
     assert [r.status for r in results] == ["passed", "passed", "passed"], [(r.label, r.status, r.steps) for r in results]
+
+
+def test_localhost_is_ipv4_in_runner_container(tmp_path):
+    import shutil, subprocess
+    import pytest
+    from preflight import check, docker
+    if not shutil.which("docker") or not docker.available():
+        pytest.skip("needs Docker")
+    (tmp_path / ".github" / "workflows").mkdir(parents=True)
+    (tmp_path / ".github" / "workflows" / "ci.yml").write_text("""
+on: pull_request
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "$(getent ahostsv6 localhost | grep -c '::1')" = 0 || test "$(getent hosts localhost | awk '{print $1}')" = 127.0.0.1
+""")
+    for args in (["init", "-q", "-b", "main"], ["add", "."], ["commit", "-qm", "x"]):
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *args], cwd=tmp_path, check=True)
+    plan = check.build_plan(tmp_path, "o/r", "main", [".github/workflows/ci.yml"], None, None, quick=False, docker=True)
+    results = check.execute(plan, tmp_path, fail_fast=True, verbose=False, snapshot="head", jobs=1)
+    assert [r.status for r in results] == ["passed"], [(r.label, r.steps) for r in results]
