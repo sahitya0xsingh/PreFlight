@@ -1,84 +1,170 @@
-// A faceted crystal made of one shard per compared job run, coloured by outcome.
-// Plain three.js (no React renderer): one InstancedMesh, a few lights, fog.
+// A sphere of code: one glowing label per compared job run (its real job name), coloured by
+// outcome, inside a cloud of code tokens. The labels assemble on load and explode on scroll.
+// Plain three.js: one instanced quad mesh, billboarded and animated in the vertex shader.
 import * as THREE from 'three'
 
 const COLORS = {
-  agree: new THREE.Color('#cfe9ff'),
-  disagree: new THREE.Color('#ff5a4e'),
-  excluded: new THREE.Color('#ffc46b'),
-  mine: new THREE.Color('#7df9ff'),
+  agree: '#d6ecff',
+  mine: '#7df9ff',
+  disagree: '#ff5a4e',
+  excluded: '#ffc46b',
+  dust: '#3d5f86',
 }
+
+const CODE = [
+  '{', '}', '=>', '&&', '||', '</>', '()', '[]', ';', '$', '#!', '::', '!=', '==', '++', '/*', '*/', '//',
+  'uses:', 'run:', 'needs:', 'if:', 'with:', 'steps:', 'jobs:', 'on: pull_request', 'runs-on: ubuntu-latest',
+  '$ mvn verify', '$ npm test', '$ pytest', '$ tox -e typing', '$ git push', 'git merge', 'exit 0', 'exit 1',
+  'matrix.os', 'actions/checkout', 'setup-java', 'setup-node', 'setup-python', 'docker run', 'FROM ubuntu',
+  'def main():', 'const ci =', 'import yaml', 'assert ok', 'return 0', 'throw err', 'catch (e)', 'await run()',
+  '0x1f', '200 OK', 'PASS', 'FAIL', '✓', '✗', 'SHA 7f3a9c', 'HEAD', 'origin/main', '--docker', '-j 4',
+]
+
+// Draw every distinct label once into a texture atlas; each instance points at its cell.
+function atlas(labels) {
+  const COLS = 8, CW = 256, CH = 64
+  const rows = Math.ceil(labels.length / COLS)
+  const c = document.createElement('canvas')
+  c.width = COLS * CW
+  c.height = THREE.MathUtils.ceilPowerOfTwo(Math.max(1, rows) * CH)
+  const g = c.getContext('2d')
+  g.fillStyle = '#fff'
+  g.textBaseline = 'middle'
+  g.textAlign = 'center'
+  labels.forEach((t, i) => {
+    let size = 34
+    g.font = `500 ${size}px "JetBrains Mono", ui-monospace, Menlo, monospace`
+    while (g.measureText(t).width > CW - 16 && size > 12) {
+      size -= 2
+      g.font = `500 ${size}px "JetBrains Mono", ui-monospace, Menlo, monospace`
+    }
+    g.fillText(t, (i % COLS) * CW + CW / 2, Math.floor(i / COLS) * CH + CH / 2)
+  })
+  const tex = new THREE.CanvasTexture(c)
+  tex.anisotropy = 4
+  tex.colorSpace = THREE.SRGBColorSpace
+  return { tex, cols: COLS, cellW: CW / c.width, cellH: CH / c.height }
+}
+
+const VERT = /* glsl */ `
+  attribute vec3 aDir;
+  attribute float aRadius;
+  attribute float aSeed;
+  attribute float aScale;
+  attribute vec2 aCell;
+  attribute vec3 aColor;
+  uniform float uTime, uScroll, uIntro, uCellW, uCellH;
+  varying vec2 vUv;
+  varying vec3 vColor;
+  varying float vAlpha;
+  void main() {
+    // Assemble from far away on load; burst outward (each label at its own speed) on scroll.
+    float intro = 1.0 + (1.0 - uIntro) * (3.0 + aSeed * 5.0);
+    float burst = 1.0 + uScroll * (1.2 + aSeed * 3.5);
+    vec3 drift = 0.08 * vec3(sin(uTime * 0.7 + aSeed * 40.0), cos(uTime * 0.6 + aSeed * 23.0), sin(uTime * 0.5 + aSeed * 11.0));
+    vec3 center = aDir * aRadius * intro * burst + drift;
+    vec4 mv = modelViewMatrix * vec4(center, 1.0);
+    mv.xy += position.xy * aScale;            // billboard: the label always faces the camera
+    gl_Position = projectionMatrix * mv;
+    vUv = vec2(aCell.x + uv.x * uCellW, 1.0 - (aCell.y + (1.0 - uv.y) * uCellH));
+    vColor = aColor;
+    float depth = clamp((-mv.z - 6.0) / 18.0, 0.0, 1.0);
+    float flicker = 0.82 + 0.18 * sin(uTime * 2.3 + aSeed * 60.0);
+    float near = smoothstep(5.0, 9.0, -mv.z);   // tokens flying past the camera fade out
+    vAlpha = mix(1.0, 0.18, depth) * flicker * uIntro * near;
+  }
+`
+
+const FRAG = /* glsl */ `
+  uniform sampler2D uAtlas;
+  varying vec2 vUv;
+  varying vec3 vColor;
+  varying float vAlpha;
+  void main() {
+    float a = texture2D(uAtlas, vUv).a * vAlpha;
+    if (a < 0.02) discard;
+    gl_FragColor = vec4(vColor * 1.25, a);
+  }
+`
 
 export function mountCrystal(canvas, shards, { reduced = false } = {}) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
-  renderer.outputColorSpace = THREE.SRGBColorSpace
-  renderer.toneMapping = THREE.ACESFilmicToneMapping
-  renderer.toneMappingExposure = 1.35
-
   const scene = new THREE.Scene()
-  scene.fog = new THREE.FogExp2(0x05070b, 0.028)
   const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100)
-  camera.position.set(0, 0, 11)
+  camera.position.set(0, 0, 13)
 
-  scene.add(new THREE.HemisphereLight(0xbfe3ff, 0x0a0d14, 0.55))
-  const key = new THREE.DirectionalLight(0xffffff, 2.4)
-  key.position.set(4, 6, 8)
-  scene.add(key)
-  const rim = new THREE.PointLight(0x5fd7ff, 40, 30)
-  rim.position.set(-6, -2, -4)
-  scene.add(rim)
-  const warm = new THREE.PointLight(0xffb36b, 14, 20)
-  warm.position.set(5, -4, 3)
-  scene.add(warm)
+  // Data labels (one per job run) + a dust of code tokens around them.
+  const runs = shards.length ? shards : [{ o: 'agree', label: 'ci' }]
+  const DUST = 520
+  const labels = [...new Set([...runs.map((s) => s.label), ...CODE])]
+  const cellOf = new Map(labels.map((t, i) => [t, i]))
+  const { tex, cols, cellW, cellH } = atlas(labels)
 
-  const n = Math.max(1, shards.length)
-  const geo = new THREE.OctahedronGeometry(1, 0)
-  geo.scale(0.16, 0.42, 0.16)
-  const mat = new THREE.MeshPhysicalMaterial({
-    metalness: 0.05, roughness: 0.18, clearcoat: 1, clearcoatRoughness: 0.06,
-    flatShading: true, transparent: true, opacity: 0.95,
-    emissive: new THREE.Color('#0b2236'), emissiveIntensity: 0.6,
+  const total = runs.length + DUST
+  const quad = new THREE.PlaneGeometry(1, 0.25)
+  const geo = new THREE.InstancedBufferGeometry()
+  geo.index = quad.index
+  geo.setAttribute('position', quad.getAttribute('position'))
+  geo.setAttribute('uv', quad.getAttribute('uv'))
+  geo.instanceCount = total
+
+  const aDir = new Float32Array(total * 3), aRadius = new Float32Array(total), aSeed = new Float32Array(total)
+  const aScale = new Float32Array(total), aCell = new Float32Array(total * 2), aColor = new Float32Array(total * 3)
+  const golden = Math.PI * (3 - Math.sqrt(5))
+  const rand = (i) => ((Math.sin(i * 12.9898) * 43758.5453) % 1 + 1) % 1
+  const col = new THREE.Color()
+  for (let i = 0; i < total; i++) {
+    const isRun = i < runs.length
+    let dir
+    if (isRun) {   // job runs on a Fibonacci shell: an even sphere of labels
+      const n = runs.length, y = 1 - (i / Math.max(1, n - 1)) * 2, r = Math.sqrt(1 - y * y), t = golden * i
+      dir = new THREE.Vector3(Math.cos(t) * r, y, Math.sin(t) * r)
+    } else {       // code dust: random directions, wider spread
+      dir = new THREE.Vector3(rand(i) - 0.5, rand(i + 7) - 0.5, rand(i + 13) - 0.5).normalize()
+    }
+    aDir.set([dir.x, dir.y, dir.z], i * 3)
+    aRadius[i] = isRun ? 2.6 + rand(i + 3) * 0.5 : 3.6 + rand(i + 5) * 7
+    aSeed[i] = rand(i + 11)
+    aScale[i] = isRun ? 0.78 : 0.4 + rand(i + 17) * 0.35
+    const label = isRun ? runs[i].label : CODE[Math.floor(rand(i + 19) * CODE.length)]
+    const cell = cellOf.get(label)
+    aCell.set([(cell % cols) * cellW, Math.floor(cell / cols) * cellH], i * 2)
+    col.set(COLORS[isRun ? runs[i].o : 'dust'] || COLORS.agree)
+    aColor.set([col.r, col.g, col.b], i * 3)
+  }
+  const attr = (a, n) => new THREE.InstancedBufferAttribute(a, n)
+  geo.setAttribute('aDir', attr(aDir, 3))
+  geo.setAttribute('aRadius', attr(aRadius, 1))
+  geo.setAttribute('aSeed', attr(aSeed, 1))
+  geo.setAttribute('aScale', attr(aScale, 1))
+  geo.setAttribute('aCell', attr(aCell, 2))
+  geo.setAttribute('aColor', attr(aColor, 3))
+
+  const uniforms = {
+    uTime: { value: 0 }, uScroll: { value: 0 }, uIntro: { value: reduced ? 1 : 0 },
+    uAtlas: { value: tex }, uCellW: { value: cellW }, uCellH: { value: cellH },
+  }
+  const mat = new THREE.ShaderMaterial({
+    uniforms, vertexShader: VERT, fragmentShader: FRAG,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
   })
-  const mesh = new THREE.InstancedMesh(geo, mat, n)
+  const mesh = new THREE.Mesh(geo, mat)
+  mesh.frustumCulled = false
   const group = new THREE.Group()
   group.add(mesh)
-  scene.add(group)
 
-  // Shards on a Fibonacci sphere, pointing outward, so the cluster reads as one crystal.
-  const base = []
-  const golden = Math.PI * (3 - Math.sqrt(5))
-  const dummy = new THREE.Object3D()
-  const up = new THREE.Vector3(0, 1, 0)
-  for (let i = 0; i < n; i++) {
-    const y = 1 - (i / Math.max(1, n - 1)) * 2
-    const r = Math.sqrt(1 - y * y)
-    const t = golden * i
-    const dir = new THREE.Vector3(Math.cos(t) * r, y, Math.sin(t) * r)
-    const jitter = 0.85 + ((i * 9301 + 49297) % 233280) / 233280 * 0.45
-    base.push({ dir, radius: 2.6 * jitter, spin: (i % 7) * 0.9 })
-    mesh.setColorAt(i, COLORS[shards[i]] || COLORS.agree)
-  }
-  mesh.instanceColor.needsUpdate = true
-
-  // A faint wireframe core for depth.
+  // A faint wireframe core, so the sphere reads as one object.
   const core = new THREE.Mesh(
-    new THREE.IcosahedronGeometry(1.55, 1),
-    new THREE.MeshBasicMaterial({ color: 0x7fd8ff, wireframe: true, transparent: true, opacity: 0.08 }),
+    new THREE.IcosahedronGeometry(1.7, 1),
+    new THREE.MeshBasicMaterial({ color: 0x7fd8ff, wireframe: true, transparent: true, opacity: 0.07 }),
   )
   group.add(core)
-
-  // Dust.
-  const dustGeo = new THREE.BufferGeometry()
-  const dust = new Float32Array(900 * 3)
-  for (let i = 0; i < dust.length; i++) dust[i] = (Math.random() - 0.5) * 30
-  dustGeo.setAttribute('position', new THREE.BufferAttribute(dust, 3))
-  const dustPts = new THREE.Points(dustGeo, new THREE.PointsMaterial({ color: 0x9fd6ff, size: 0.025, transparent: true, opacity: 0.55 }))
-  scene.add(dustPts)
+  scene.add(group)
 
   let mx = 0, my = 0, scroll = 0, raf = 0, w = 0, h = 0
   const onMove = (e) => { mx = e.clientX / window.innerWidth - 0.5; my = e.clientY / window.innerHeight - 0.5 }
-  const onScroll = () => { scroll = Math.min(1, window.scrollY / (window.innerHeight * 1.2)) }
+  const onScroll = () => { scroll = Math.min(1, window.scrollY / (window.innerHeight * 1.1)) }
   window.addEventListener('pointermove', onMove, { passive: true })
   window.addEventListener('scroll', onScroll, { passive: true })
 
@@ -86,7 +172,7 @@ export function mountCrystal(canvas, shards, { reduced = false } = {}) {
     w = canvas.clientWidth; h = canvas.clientHeight
     renderer.setSize(w, h, false)
     camera.aspect = w / h
-    // Keep the whole crystal in frame on tall, narrow screens.
+    // Keep the whole sphere in frame on tall, narrow screens.
     camera.position.z = 13 / Math.min(1, camera.aspect * 1.25) + (w < 900 ? 4 : 0)
     camera.updateProjectionMatrix()
   }
@@ -94,28 +180,26 @@ export function mountCrystal(canvas, shards, { reduced = false } = {}) {
   ro.observe(canvas)
   resize()
 
+  // Re-draw the atlas once the web font has loaded, so labels use JetBrains Mono.
+  document.fonts?.ready.then(() => {
+    const fresh = atlas(labels)
+    uniforms.uAtlas.value = fresh.tex
+    tex.dispose()
+  })
+
   const clock = new THREE.Clock()
   function frame() {
     const t = reduced ? 0 : clock.getElapsedTime()
-    const burst = 1 + scroll * 0.9
-    for (let i = 0; i < n; i++) {
-      const b = base[i]
-      const breathe = 1 + Math.sin(t * 0.8 + i * 0.37) * 0.03
-      dummy.position.copy(b.dir).multiplyScalar(b.radius * breathe * burst)
-      dummy.quaternion.setFromUnitVectors(up, b.dir)
-      dummy.rotateY(b.spin + t * 0.25)
-      dummy.updateMatrix()
-      mesh.setMatrixAt(i, dummy.matrix)
-    }
-    mesh.instanceMatrix.needsUpdate = true
-    group.rotation.y = t * 0.12 + mx * 0.6
-    group.rotation.x = -0.25 + my * 0.4 + scroll * 0.6
-    group.position.x = (w > 900 ? 2.6 : 0) * (1 - scroll * 0.5)
+    uniforms.uTime.value = t
+    uniforms.uScroll.value = scroll
+    if (!reduced) uniforms.uIntro.value = 1 - Math.pow(1 - Math.min(1, t / 2.6), 4)
+    group.rotation.y = t * 0.1 + mx * 0.6
+    group.rotation.x = -0.2 + my * 0.4 + scroll * 0.5
+    group.position.x = (w > 900 ? 2.8 : 0) * (1 - scroll * 0.6)
     group.position.y = w > 900 ? 0 : 3.2 + scroll * 2
     core.rotation.y = -t * 0.2
-    dustPts.rotation.y = t * 0.01
-    // Past the hero, the crystal recedes so the content stays readable.
-    canvas.style.opacity = String(1 - scroll * 0.72)
+    core.material.opacity = 0.07 * (1 - scroll)
+    canvas.style.opacity = String(1 - scroll * 0.55)
     renderer.render(scene, camera)
     if (!reduced) raf = requestAnimationFrame(frame)
   }
@@ -126,6 +210,6 @@ export function mountCrystal(canvas, shards, { reduced = false } = {}) {
     ro.disconnect()
     window.removeEventListener('pointermove', onMove)
     window.removeEventListener('scroll', onScroll)
-    geo.dispose(); mat.dispose(); dustGeo.dispose(); renderer.dispose()
+    geo.dispose(); quad.dispose(); mat.dispose(); uniforms.uAtlas.value.dispose(); renderer.dispose()
   }
 }

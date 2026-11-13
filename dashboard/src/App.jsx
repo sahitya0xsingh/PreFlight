@@ -104,7 +104,7 @@ function Hero({ t, shards }) {
   useEffect(() => mountCrystal(canvas.current, shards, { reduced: reducedMotion() }), [shards])
   return (
     <section className="hero">
-      <canvas ref={canvas} className="crystal" aria-label={`3D crystal of ${shards.length} shards, one per compared job run`} />
+      <canvas ref={canvas} className="crystal" aria-label={`3D sphere of ${shards.length} job names, one per compared job run`} />
       <div className="hero-copy">
         <p className="eyebrow"><Scramble text="PREFLIGHT / LOCAL CI THAT AGREES WITH GITHUB" /></p>
         <h1 className="mega"><Count to={pct(t.agree, t.compared)} decimals={1} /><span>%</span></h1>
@@ -121,7 +121,7 @@ function Hero({ t, shards }) {
         </div>
       </div>
       <div className="legend" aria-hidden="true">
-        <span><i className="d agree" />agrees with GitHub</span>
+        <span><i className="d agree" />each label is a real job run · agrees with GitHub</span>
         <span><i className="d disagree" />disagrees</span>
         <span><i className="d excluded" />GitHub's runner failed</span>
       </div>
@@ -313,7 +313,10 @@ export default function App() {
   const mine = all.filter((r) => r.set === 'authors')
   const t = totals(all)
   const shards = useMemo(
-    () => all.flatMap((r) => r.runs.map((x) => (r.set === 'authors' && outcome(x) === 'agree' ? 'mine' : outcome(x)))),
+    () => all.flatMap((r) => r.runs.map((x) => ({
+      o: r.set === 'authors' && outcome(x) === 'agree' ? 'mine' : outcome(x),
+      label: x.job.length > 22 ? x.job.slice(0, 21) + '…' : x.job,
+    }))),
     [data],
   )
   return (

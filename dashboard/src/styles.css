@@ -62,6 +62,10 @@ main { padding: 0 clamp(16px, 4vw, 48px); max-width: 1320px; margin: 0 auto; }
 .hero { position: relative; min-height: 100vh; display: flex; align-items: center; padding: 110px 0 80px; }
 .crystal { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: -1; display: block; }
 .hero-copy { position: relative; max-width: 640px; }
+.hero-copy::before {
+  content: ''; position: absolute; inset: -80px -120px -80px -160px; z-index: -1; pointer-events: none;
+  background: radial-gradient(closest-side, rgba(5, 7, 11, 0.85), rgba(5, 7, 11, 0.55) 55%, transparent);
+}
 .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: 0.18em; color: var(--ice); margin: 0 0 18px; }
 .mega {
   font-size: clamp(88px, 17vw, 220px); line-height: 0.86; margin: 0; font-weight: 600; letter-spacing: -0.06em;
