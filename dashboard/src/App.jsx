@@ -107,13 +107,19 @@ function Ring({ value, size = 92 }) {
 }
 
 const THEMES = [
-  ['ice', 'Ice', '#7df9ff'], ['aurora', 'Aurora', '#3dffb0'], ['violet', 'Violet', '#a77bff'],
-  ['sakura', 'Sakura', '#ff7fb0'], ['paper', 'Paper (light)', '#f5f3ee'],
+  ['ice', 'Glacier', 'linear-gradient(135deg, #8de9ff, #5b7cff)'],
+  ['aurora', 'Aurora', 'linear-gradient(135deg, #2ef2b8, #9b6bff)'],
+  ['nebula', 'Nebula', 'linear-gradient(135deg, #c38bff, #ff5fb7)'],
+  ['solar', 'Solar', 'linear-gradient(135deg, #ffb547, #ff5e7e)'],
+  ['paper', 'Paper (light)', 'linear-gradient(135deg, #f6f4ef 50%, #2556e6 50%)'],
 ]
 
 function useTheme() {
   const [theme, setTheme] = useState(() => {
-    try { return localStorage.getItem('pf-theme') || 'ice' } catch { return 'ice' }
+    try {
+      const t = localStorage.getItem('pf-theme')
+      return ['ice', 'aurora', 'nebula', 'solar', 'paper'].includes(t) ? t : 'ice'
+    } catch { return 'ice' }
   })
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -145,6 +151,7 @@ function Hero({ t, shards, theme }) {
     <section className="hero">
       <canvas ref={canvas} className="crystal" aria-label={`3D sphere of ${shards.length} job names, one per compared job run`} />
       <div className="hero-copy">
+        <Logo size={84} className="big hero-logo" title="PreFlight logo" />
         <p className="eyebrow"><Scramble text="PREFLIGHT / LOCAL CI THAT AGREES WITH GITHUB" /></p>
         <h1 className="mega"><Count to={pct(t.agree, t.compared)} decimals={1} /><span>%</span></h1>
         <p className="lede">
@@ -364,8 +371,16 @@ export default function App() {
   return (
     <>
       <div className="grain" aria-hidden="true" />
+      <svg width="0" height="0" style={{ position: 'absolute' }} aria-hidden="true">
+        <defs>
+          <linearGradient id="ring-grad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" style={{ stopColor: 'var(--ice-2)' }} />
+            <stop offset="1" style={{ stopColor: 'var(--accent-2)' }} />
+          </linearGradient>
+        </defs>
+      </svg>
       <nav className="nav">
-        <a className="brand" href="#top"><Logo />PREFLIGHT</a>
+        <a className="brand" href="#top"><Logo size={30} /><span className="brand-name">PREFLIGHT</span></a>
         <div className="links">
           {mine.length > 0 && <a href="#mine">My PRs</a>}
           <a href="#projects">Benchmark</a>
