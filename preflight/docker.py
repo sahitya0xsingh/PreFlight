@@ -121,10 +121,21 @@ def default_parallel() -> int:
     return max(1, min(4, int(mem / 2.5e9), cpus // 2 or 1))
 
 
+# GitHub moved `ubuntu-latest` from 24.04 to 26.04 in a rollout from 2026-10-19 to 2026-11-19
+# (actions/runner-images#14748). Replays of older PRs keep the image those PRs ran on.
+UBUNTU_LATEST = "26.04"
+UBUNTU_LATEST_SINCE = "2026-10-19"
+UBUNTU_PREVIOUS = "24.04"
+
+
 def ubuntu_version(runs_on: Any) -> str:
     text = json.dumps(runs_on).lower()
     m = re.search(r"ubuntu-(\d\d\.\d\d)", text)
-    return m.group(1) if m else "24.04"
+    if m:
+        return m.group(1)
+    if AS_OF and AS_OF < UBUNTU_LATEST_SINCE:
+        return UBUNTU_PREVIOUS
+    return UBUNTU_LATEST
 
 
 _IMAGE_LOCK = threading.Lock()

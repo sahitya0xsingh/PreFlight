@@ -290,7 +290,7 @@ def test_docker_mode_runs_service_jobs():
 def test_docker_helpers():
     assert dockermod.ubuntu_version("ubuntu-22.04") == "22.04"
     assert dockermod.ubuntu_version(["self-hosted", "ubuntu-20.04"]) == "20.04"
-    assert dockermod.ubuntu_version("ubuntu-latest") == "24.04"
+    assert dockermod.ubuntu_version("ubuntu-latest") == dockermod.UBUNTU_LATEST
     opts = "--health-cmd 'pg_isready -U x' --network foo -p 5432:5432 --health-retries=5 --hostname=db"
     assert dockermod._service_options(opts) == ["--health-cmd", "pg_isready -U x", "--health-retries=5"]
     script, what = dockermod.setup_script("actions/setup-java", {"java-version": "21", "distribution": "zulu"}, Path("."))
@@ -301,10 +301,10 @@ def test_docker_helpers():
 
 def _docker_ready():
     return dockermod.available() and subprocess.run(
-        ["docker", "image", "inspect", "preflight-runner:24.04"], capture_output=True).returncode == 0
+        ["docker", "image", "inspect", "preflight-runner:26.04"], capture_output=True).returncode == 0
 
 
-@pytest.mark.skipif(not _docker_ready(), reason="needs Docker and the preflight-runner:24.04 image")
+@pytest.mark.skipif(not _docker_ready(), reason="needs Docker and the preflight-runner:26.04 image")
 def test_docker_job_is_isolated(repo, tmp_path):
     plan = check.build_plan(repo, "acme/widget", "main", ["app.py"], None, None, quick=False, docker=True)
     p = plan.to_run[0]
@@ -320,7 +320,7 @@ def test_docker_job_is_isolated(repo, tmp_path):
     dockermod.clear_snapshot_cache()
 
 
-@pytest.mark.skipif(not _docker_ready(), reason="needs Docker and the preflight-runner:24.04 image")
+@pytest.mark.skipif(not _docker_ready(), reason="needs Docker and the preflight-runner:26.04 image")
 def test_parallel_needs_and_fail_fast(tmp_path, monkeypatch):
     monkeypatch.setenv("PREFLIGHT_HOME", str(tmp_path / "home"))
     root = tmp_path / "par"
@@ -370,7 +370,7 @@ def test_native_mode_points_unknown_actions_at_docker():
     assert odd.verdict == "partial" and "--docker runs it" in odd.reasons[0]
 
 
-@pytest.mark.skipif(not _docker_ready(), reason="needs Docker and the preflight-runner:24.04 image")
+@pytest.mark.skipif(not _docker_ready(), reason="needs Docker and the preflight-runner:26.04 image")
 def test_local_composite_and_node_actions(tmp_path, monkeypatch):
     monkeypatch.setenv("PREFLIGHT_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("PREFLIGHT_GITHUB_TOKEN", "dummy-token")
@@ -483,7 +483,7 @@ def test_bench_report(tmp_path, monkeypatch):
     assert "ci.yml / c" in text
 
 
-@pytest.mark.skipif(not _docker_ready(), reason="needs Docker and the preflight-runner:24.04 image")
+@pytest.mark.skipif(not _docker_ready(), reason="needs Docker and the preflight-runner:26.04 image")
 def test_checkout_of_another_repo_clones_it(tmp_path, monkeypatch):
     monkeypatch.setenv("PREFLIGHT_HOME", str(tmp_path / "home"))
     root = tmp_path / "r"
@@ -513,7 +513,7 @@ def test_checkout_of_another_repo_clones_it(tmp_path, monkeypatch):
     dockermod.clear_snapshot_cache()
 
 
-@pytest.mark.skipif(not _docker_ready(), reason="needs Docker and the preflight-runner:24.04 image")
+@pytest.mark.skipif(not _docker_ready(), reason="needs Docker and the preflight-runner:26.04 image")
 def test_oom_kill_is_detected_and_workspace_parent_is_writable(repo, tmp_path):
     job = workflow.parse(textwrap.dedent("""
         on: pull_request
@@ -692,3 +692,19 @@ jobs:
     plan = check.build_plan(tmp_path, "o/r", "main", [".github/workflows/ci.yml"], None, None, quick=False, docker=True)
     results = check.execute(plan, tmp_path, fail_fast=True, verbose=False, snapshot="head", jobs=1)
     assert [r.status for r in results] == ["passed", "passed"], [(r.label, r.steps) for r in results]
+
+
+def test_ubuntu_latest_follows_githubs_migration():
+    from preflight import docker
+    saved = docker.AS_OF
+    try:
+        docker.AS_OF = None
+        assert docker.ubuntu_version("ubuntu-latest") == "26.04"
+        assert docker.ubuntu_version(["ubuntu-22.04"]) == "22.04"
+        docker.AS_OF = "2026-07-09T05:46:47Z"   # replay of a PR from before the rollout
+        assert docker.ubuntu_version("ubuntu-latest") == "24.04"
+        assert docker.ubuntu_version("ubuntu-26.04") == "26.04"
+        docker.AS_OF = "2026-10-28T19:53:42Z"
+        assert docker.ubuntu_version("ubuntu-latest") == "26.04"
+    finally:
+        docker.AS_OF = saved

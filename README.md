@@ -62,7 +62,8 @@ preflight install-hook --docker        # the same, before every push
 ```
 
 - Every job run starts from `preflight-runner:<ubuntu version>` (built once, picked from `runs-on`), or from
-  the job's own `container:` image. The code is copied in, so jobs never change your checkout. In hook mode only
+  the job's own `container:` image. `ubuntu-latest` means Ubuntu 26.04, as on GitHub since its rollout began on
+  2026-10-19; a benchmark replay of an older PR uses 24.04, the image that PR actually ran on. The code is copied in, so jobs never change your checkout. In hook mode only
   committed code is copied.
 - Machine-setup steps (`sudo apt-get install …`) run for real, because they only touch the container.
 - `setup-java`, `setup-node`, `setup-python` and `setup-go` install the version the workflow (or matrix entry)
