@@ -183,13 +183,19 @@ def _version_file(root: Path, name: str | None) -> str | None:
     return text.splitlines()[0].strip().lstrip("v") if text else None
 
 
-# Resolve version ranges ("26.x", "lts/*") as of this date (YYYY-MM-DD) instead of today.
-# The benchmark sets it to the PR's CI date, so a replay installs what GitHub installed then.
+# Replays only: the PR's CI start time (ISO 8601). Version ranges ("26.x") and package installs
+# (pip, uv, npm) then resolve as they did when GitHub ran the PR, not as they would today.
 AS_OF: str | None = None
 
 
+def as_of_env() -> dict[str, str]:
+    if not AS_OF:
+        return {}
+    return {"PIP_UPLOADED_PRIOR_TO": AS_OF, "UV_EXCLUDE_NEWER": AS_OF, "NPM_CONFIG_BEFORE": AS_OF}
+
+
 def resolve_node(spec: str) -> str:
-    return _resolve_node(spec, AS_OF)
+    return _resolve_node(spec, AS_OF[:10] if AS_OF else None)
 
 
 @functools.lru_cache(maxsize=64)
@@ -388,6 +394,8 @@ class DockerJob:
                 args += ["-v", f"{vol}:{path}"]
         if self.artifacts:
             args += ["-v", f"{self.artifacts}:{self.artifact_root}"]
+        for k, v in as_of_env().items():
+            args += ["-e", f"{k}={v}"]
         args += ["--entrypoint", "tail", self.image, "-f", "/dev/null"]
         if self.spec:
             self.say(f"  pulling {self.image} if needed...")

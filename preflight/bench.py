@@ -285,7 +285,7 @@ def run_case(repo: str, root: Path, case: Case, base_branch: str, per_case: int,
 def _run_case(repo: str, root: Path, case: Case, base_branch: str, per_case: int, max_minutes: float,
               jobs: int, only: list[str] | None, seed: int, want: set[tuple[str, str]] | None) -> list[Row]:
     base_branch = case.base or base_branch
-    docker.AS_OF = case.created_at[:10]   # "26.x" means the newest 26 release on the PR's date
+    docker.AS_OF = case.created_at   # resolve "26.x" and PyPI/npm packages as of the PR's CI run
     base, built = prepare(root, case, base_branch)
     changed = gitinfo.changed_files(root, base, include_worktree=False)
     prof = profile.load(repo.split("/")[0])
