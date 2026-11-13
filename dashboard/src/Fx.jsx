@@ -102,9 +102,12 @@ export function Title({ children, as: Tag = 'h2' }) {
   return (
     <Tag ref={ref} className={`title-split ${on ? 'on' : ''}`} aria-label={String(children)}>
       {words.map((w, i) => (
-        <span className="w" key={i} aria-hidden="true">
-          <span style={{ transitionDelay: `${i * 55}ms` }}>{w}</span>{' '}
-        </span>
+        <React.Fragment key={i}>
+          <span className="w" aria-hidden="true">
+            <span style={{ transitionDelay: `${i * 55}ms` }}>{w}</span>
+          </span>
+          {i < words.length - 1 ? ' ' : null}
+        </React.Fragment>
       ))}
     </Tag>
   )

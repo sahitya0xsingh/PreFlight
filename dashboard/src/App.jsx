@@ -262,6 +262,8 @@ function Ledger({ repos }) {
   const [repo, setRepo] = useState('all')
   const [which, setWhich] = useState('all')
   const [q, setQ] = useState('')
+  const [limit, setLimit] = useState(40)
+  useEffect(() => setLimit(40), [repo, which, q])
   const all = useMemo(
     () => repos.flatMap((r) => r.runs.map((x) => ({ ...x, repo: r.repo, set: r.set, outcome: outcome(x) }))),
     [repos],
@@ -295,22 +297,25 @@ function Ledger({ repos }) {
         <table>
           <thead><tr><th>Project</th><th>PR commit</th><th>Job</th><th>GitHub</th><th>PreFlight</th><th className="num">Local</th></tr></thead>
           <tbody>
-            {shown.slice(0, 500).map((x, i) => (
+            {shown.slice(0, limit).map((x, i) => (
               <tr key={i} className={`o-${x.outcome}`}>
-                <td className="mono">{x.repo.split('/')[1]}{x.set === 'authors' && <span className="me">ME</span>}</td>
-                <td>
+                <td className="mono" data-label="Project">{x.repo.split('/')[1]}{x.set === 'authors' && <span className="me">ME</span>}</td>
+                <td data-label="PR commit">
                   <a className="mono" href={`https://github.com/${x.repo}/commit/${x.sha}`} target="_blank" rel="noreferrer">{x.sha.slice(0, 7)}</a>
                   <div className="title">{x.title}</div>
                 </td>
-                <td>{x.workflow.replace(/\.ya?ml$/, '')} / {x.job}</td>
-                <td><a className={`pill g-${x.github}`} href={x.url} target="_blank" rel="noreferrer">{x.github}</a></td>
-                <td><span className={`pill l-${x.local}`} title={x.reason || ''}>{x.local}</span></td>
-                <td className="mono num">{x.seconds ? `${Math.round(x.seconds)}s` : ''}</td>
+                <td data-label="Job">{x.workflow.replace(/\.ya?ml$/, '')} / {x.job}</td>
+                <td data-label="GitHub"><a className={`pill g-${x.github}`} href={x.url} target="_blank" rel="noreferrer">{x.github}</a></td>
+                <td data-label="PreFlight"><span className={`pill l-${x.local}`} title={x.reason || ''}>{x.local}</span></td>
+                <td className="mono num" data-label="Local">{x.seconds ? `${Math.round(x.seconds)}s` : ''}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      {shown.length > limit && (
+        <button className="more" onClick={() => setLimit(limit + 40)}>Show more ({shown.length - limit} left)</button>
+      )}
     </section>
   )
 }
@@ -318,6 +323,13 @@ function Ledger({ repos }) {
 export default function App() {
   const [data, setData] = useState(null)
   const [err, setErr] = useState('')
+  const [menu, setMenu] = useState(false)
+  useEffect(() => {
+    if (!menu) return
+    const esc = (e) => e.key === 'Escape' && setMenu(false)
+    addEventListener('keydown', esc)
+    return () => removeEventListener('keydown', esc)
+  }, [menu])
   useTilt()
   useEffect(() => {
     fetch('./results.json')
@@ -352,7 +364,11 @@ export default function App() {
       </svg>
       <nav className="nav">
         <a className="brand" href="#top"><Logo size={30} /><span className="brand-name">PREFLIGHT</span></a>
-        <div className="links">
+        <button className={`menu-btn ${menu ? 'open' : ''}`} aria-label={menu ? 'Close menu' : 'Open menu'}
+          aria-expanded={menu} aria-controls="nav-links" onClick={() => setMenu(!menu)}>
+          <i /><i />
+        </button>
+        <div className={`links ${menu ? 'open' : ''}`} id="nav-links" onClick={(e) => e.target.closest('a') && setMenu(false)}>
           {mine.length > 0 && <a href="#mine">My PRs</a>}
           <a href="#projects">Benchmark</a>
           <a href="#method">Method</a>
