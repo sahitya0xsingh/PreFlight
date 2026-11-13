@@ -296,7 +296,7 @@ echo PATH+={job}/bin
 export UV_PYTHON_INSTALL_DIR={TOOL_CACHE}/uv-python UV_PYTHON_PREFERENCE=only-managed
 uv python install -q '{req}' >&2
 p=$(uv python find '{req}')
-src=$(dirname "$(dirname "$p")")
+src=$(realpath "$(dirname "$(dirname "$p")")")
 flock "$src.lock" sh -c '
   [ -e "$1/.preflight-ready" ] && exit 0
   b=$(basename "$2"); [ -e "$1/bin/python" ] || ln -s "$b" "$1/bin/python"
@@ -305,6 +305,7 @@ flock "$src.lock" sh -c '
   touch "$1/.preflight-ready"' _ "$src" "$p" >&2
 dst=/home/runner/work/_tool/python/$(basename "$src")
 mkdir -p "$dst" && cp -a "$src/." "$dst/"
+rm -f "$dst"/lib/*/EXTERNALLY-MANAGED   # uv puts it back in the cache; the job's copy is the job's to modify
 # console scripts (pip, ...) name the cached interpreter in their shebang: point them at the copy
 {{ grep -lI "^#!$src/" "$dst"/bin/* 2>/dev/null || true; }} | xargs -r sed -i "1s|^#!$src/|#!$dst/|"
 echo pythonLocation=$dst

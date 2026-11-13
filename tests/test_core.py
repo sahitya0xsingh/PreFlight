@@ -678,6 +678,7 @@ jobs:
         with: {python-version: '3.12'}
       - run: python -c "import site; open(site.getsitepackages()[0] + '/leak_marker.py', 'w').write('')"
       - run: pip --version | grep -q /home/runner/work/_tool/python/
+      - run: python -c "import os, sys, sysconfig; sys.exit(os.path.exists(os.path.join(sysconfig.get_paths()['stdlib'], 'EXTERNALLY-MANAGED')))"
   second:
     needs: first
     runs-on: ubuntu-latest
