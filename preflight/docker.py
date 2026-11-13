@@ -271,12 +271,16 @@ echo PATH+={d}/bin
         url = f"https://nodejs.org/dist/v{v}/node-v{v}-linux-{dl_arch}.tar.gz"
         no_arm = (f"curl -fsIL '{url}' >/dev/null || {{ echo 'Node.js {v} has no linux-arm64 build "
                   f"(GitHub runs x64), so it is not checked here' >&2; exit 3; }}") if dl_arch == "arm64" else ":"
+        # The cached copy stays pristine; each job gets its own copy, so `npm -g` in one job
+        # cannot leak into the next (on GitHub every job starts from a clean tool cache).
+        job = f"/home/runner/work/_tool/node/{v}"
         script = f"""
 if [ ! -x {d}/bin/node ]; then
   {no_arm}
-  mkdir -p {d} && curl -fsSL '{url}' | tar -xz -C {d} --strip-components=1
+  mkdir -p {d}.part && curl -fsSL '{url}' | tar -xz -C {d}.part --strip-components=1 && mv {d}.part {d}
 fi
-echo PATH+={d}/bin
+mkdir -p {job} && cp -a {d}/. {job}/
+echo PATH+={job}/bin
 """
         return script, f"Node.js {v}"
     if action == "actions/setup-python":
@@ -286,16 +290,25 @@ echo PATH+={d}/bin
         req = re.sub(r"\.x$", "", spec.strip())
         if req.startswith("pypy"):
             req = "pypy@" + req[4:].lstrip("-")
+        # Install once into the shared cache (pip bootstrapped, never used there), then give the job its
+        # own copy: packages a job pip-installs must not leak into later jobs.
         script = f"""
 export UV_PYTHON_INSTALL_DIR={TOOL_CACHE}/uv-python UV_PYTHON_PREFERENCE=only-managed
 uv python install -q '{req}' >&2
 p=$(uv python find '{req}')
-d=$(dirname "$p")
-[ -e "$d/python" ] || ln -s "$p" "$d/python"
-rm -f "$d"/../lib/*/EXTERNALLY-MANAGED
-"$p" -m pip --version >/dev/null 2>&1 || "$p" -m ensurepip >&2
-echo pythonLocation=$(dirname "$d")
-echo PATH+=$d
+src=$(dirname "$(dirname "$p")")
+flock "$src.lock" sh -c '
+  [ -e "$1/.preflight-ready" ] && exit 0
+  b=$(basename "$2"); [ -e "$1/bin/python" ] || ln -s "$b" "$1/bin/python"
+  rm -f "$1"/lib/*/EXTERNALLY-MANAGED
+  "$2" -m pip --version >/dev/null 2>&1 || "$2" -m ensurepip >&2
+  touch "$1/.preflight-ready"' _ "$src" "$p" >&2
+dst=/home/runner/work/_tool/python/$(basename "$src")
+mkdir -p "$dst" && cp -a "$src/." "$dst/"
+# console scripts (pip, ...) name the cached interpreter in their shebang: point them at the copy
+{{ grep -lI "^#!$src/" "$dst"/bin/* 2>/dev/null || true; }} | xargs -r sed -i "1s|^#!$src/|#!$dst/|"
+echo pythonLocation=$dst
+echo PATH+=$dst/bin
 """
         return script, f"Python {spec}"
     if action == "actions/setup-go":

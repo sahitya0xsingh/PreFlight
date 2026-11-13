@@ -659,3 +659,35 @@ jobs:
     plan = check.build_plan(tmp_path, "o/r", "main", [".github/workflows/ci.yml"], None, None, quick=False, docker=True)
     results = check.execute(plan, tmp_path, fail_fast=True, verbose=False, snapshot="head", jobs=1)
     assert [r.status for r in results] == ["passed"], [(r.label, r.steps) for r in results]
+
+
+def test_python_packages_do_not_leak_between_jobs(tmp_path):
+    import shutil, subprocess
+    import pytest
+    from preflight import check, docker
+    if not shutil.which("docker") or not docker.available():
+        pytest.skip("needs Docker")
+    (tmp_path / ".github" / "workflows").mkdir(parents=True)
+    (tmp_path / ".github" / "workflows" / "ci.yml").write_text("""
+on: pull_request
+jobs:
+  first:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -c "import site; open(site.getsitepackages()[0] + '/leak_marker.py', 'w').write('')"
+      - run: pip --version | grep -q /home/runner/work/_tool/python/
+  second:
+    needs: first
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: "! python -c 'import leak_marker'"
+""")
+    for args in (["init", "-q", "-b", "main"], ["add", "."], ["commit", "-qm", "x"]):
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *args], cwd=tmp_path, check=True)
+    plan = check.build_plan(tmp_path, "o/r", "main", [".github/workflows/ci.yml"], None, None, quick=False, docker=True)
+    results = check.execute(plan, tmp_path, fail_fast=True, verbose=False, snapshot="head", jobs=1)
+    assert [r.status for r in results] == ["passed", "passed"], [(r.label, r.steps) for r in results]
