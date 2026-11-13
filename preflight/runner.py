@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import actionfetch, actions, expr
+from . import docker as dockermod
 from .workflow import Job, Step, Workflow, step_from_raw
 
 # Steps that set up a fresh CI machine. On a contributor's machine the tools
@@ -75,6 +76,7 @@ class JobResult:
     log_path: Path | None = None
     seconds: float = 0.0
     oom: bool = False      # the kernel killed a process in it for want of memory
+    note: str = ""         # e.g. failed on ARM64 only, passed under x64 like GitHub's runners
 
     @property
     def failed_step(self) -> StepResult | None:
@@ -230,7 +232,7 @@ class _JobRun:
         self.extra_env: dict[str, str] = {}
         self.extra_path: list[str] = []
         self.status = "success"
-        self.arch = "ARM64" if os.uname().machine in ("arm64", "aarch64") else "X64"
+        self.arch = dockermod.arch()[0] if box else ("ARM64" if os.uname().machine in ("arm64", "aarch64") else "X64")
         self.posts: list[Callable[[], None]] = []
         self.counter = 0
         self.node_paths: dict[str, list[str]] = {}
@@ -777,6 +779,11 @@ def _truthy(value: Any, ctx: expr.Context) -> bool:
     return expr.to_bool(value)
 
 
+def _runner_arch() -> str:
+    from . import docker as _d
+    return _d.arch()[0]
+
+
 def _github_env(values: dict[str, Any], workspace: str, runner_os: str, temp: str, event_path: str) -> dict[str, str]:
     gh = values.get("github") or {}
     return {
@@ -801,7 +808,7 @@ def _github_env(values: dict[str, Any], workspace: str, runner_os: str, temp: st
         "GITHUB_GRAPHQL_URL": "https://api.github.com/graphql",
         "RUNNER_OS": runner_os,
         "RUNNER_TEMP": temp,
-        "RUNNER_ARCH": "ARM64" if os.uname().machine in ("arm64", "aarch64") else "X64",
+        "RUNNER_ARCH": _runner_arch(),
         "RUNNER_TOOL_CACHE": "/opt/hostedtoolcache",
         "PREFLIGHT": "1",
     }

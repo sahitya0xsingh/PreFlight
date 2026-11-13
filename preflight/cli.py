@@ -80,6 +80,7 @@ def cmd_check(args) -> int:
         print("\nNothing to run locally for this change.")
         return 0
     print("\nRunning:")
+    plan.confirm_x64 = not args.no_x64_confirm
     results = check.execute(plan, root, fail_fast=not args.keep_going, verbose=args.verbose,
                             snapshot="head" if args.hook else "worktree",
                             jobs=args.jobs or (docker.default_parallel() if args.docker else 1))
@@ -210,6 +211,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="run each job in a fresh Ubuntu container (also runs service and container jobs)")
         if name == "check":
             s.add_argument("--keep-going", action="store_true", help="run every job even after a failure")
+            s.add_argument("--no-x64-confirm", action="store_true",
+                           help="on an ARM machine, do not re-run failures under x64 emulation (GitHub's runners are x64)")
             s.add_argument("--jobs", "-j", type=int, metavar="N",
                            help="job runs at a time in Docker mode (default: fits Docker's memory, at most 4)")
             s.add_argument("--verbose", "-v", action="store_true", help="stream step output")

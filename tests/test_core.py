@@ -708,3 +708,28 @@ def test_ubuntu_latest_follows_githubs_migration():
         assert docker.ubuntu_version("ubuntu-latest") == "26.04"
     finally:
         docker.AS_OF = saved
+
+
+def test_arm_only_failure_is_confirmed_under_x64(tmp_path):
+    import shutil, subprocess
+    import pytest
+    from preflight import check, docker
+    if not shutil.which("docker") or not docker.available() or not docker.host_is_arm():
+        pytest.skip("needs Docker on an ARM machine")
+    (tmp_path / ".github" / "workflows").mkdir(parents=True)
+    (tmp_path / ".github" / "workflows" / "ci.yml").write_text("""
+on: pull_request
+jobs:
+  arch:
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "$(uname -m)" = x86_64 && test "$RUNNER_ARCH" = X64
+""")
+    for args in (["init", "-q", "-b", "main"], ["add", "."], ["commit", "-qm", "x"]):
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *args], cwd=tmp_path, check=True)
+    plan = check.build_plan(tmp_path, "o/r", "main", [".github/workflows/ci.yml"], None, None, quick=False, docker=True)
+    [res] = check.execute(plan, tmp_path, fail_fast=True, verbose=False, snapshot="head", jobs=1)
+    assert res.status == "passed" and "x64" in res.note, (res.status, res.note, res.steps)
+    plan.confirm_x64 = False
+    [res] = check.execute(plan, tmp_path, fail_fast=True, verbose=False, snapshot="head", jobs=1)
+    assert res.status == "failed"

@@ -17,6 +17,7 @@ downloads once.
 
 from __future__ import annotations
 
+import contextvars
 import functools
 import itertools
 import json
@@ -36,6 +37,25 @@ from typing import Any, Callable
 from . import expr
 
 TOOL_CACHE = "/opt/hostedtoolcache"
+# The platform jobs run on: None = this machine's own; "linux/amd64" = x64 under emulation, which is how
+# PreFlight confirms on an ARM machine that a failure is real on GitHub's x64 runners.
+PLATFORM: contextvars.ContextVar[str | None] = contextvars.ContextVar("preflight_platform", default=None)
+
+
+def host_is_arm() -> bool:
+    return platform.machine().lower() in ("arm64", "aarch64")
+
+
+def emulating_x64() -> bool:
+    return PLATFORM.get() == "linux/amd64" and host_is_arm()
+
+
+def cache_volumes() -> dict[str, str]:
+    """Cache volumes for the current platform (x64 tool binaries must not mix with ARM64 ones)."""
+    suffix = "-amd64" if emulating_x64() else ""
+    return {f"{vol}{suffix}": path for vol, path in CACHE_VOLUMES.items()}
+
+
 CACHE_VOLUMES = {
     "preflight-toolcache": TOOL_CACHE,
     "preflight-m2": "/home/runner/.m2",
@@ -62,12 +82,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \\
  && git config --system --add safe.directory '*'
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # GitHub's runner image ships Maven; many Java workflows call a bare `mvn`.
-RUN curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz \
+RUN curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz \
       | tar -xz -C /opt && ln -s /opt/apache-maven-3.9.9/bin/mvn /usr/local/bin/mvn
 # GitHub's runner image ships Node.js on PATH (pyright, markdownlint, ... call a bare `node`).
 RUN a=$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/') \
- && v=$(curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | grep -o "node-v22[0-9.]*-linux-$a.tar.xz" | head -1) \
- && curl -fsSL "https://nodejs.org/dist/latest-v22.x/$v" | tar -xJ -C /usr/local --strip-components=1 \
+ && v=$(curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | grep -o "node-v22[0-9.]*-linux-$a.tar.xz" | head -1) \
+ && curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 "https://nodejs.org/dist/latest-v22.x/$v" | tar -xJ -C /usr/local --strip-components=1 \
  && node --version
 # GitHub's image ships Chrome and Firefox (Karma, Selenium, Playwright suites launch them). Google Chrome
 # has no Linux ARM64 build, so Chromium stands in under Chrome's names; it gets --no-sandbox because
@@ -81,7 +101,7 @@ RUN PLAYWRIGHT_BROWSERS_PATH=/opt/browsers npx -y playwright@1.48.2 install --wi
  && chmod -R a+rX /opt/browsers && rm -rf /root/.npm
 # GitHub's image ships rustup with a stable toolchain (dtolnay/rust-toolchain and friends call rustup).
 USER runner
-RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable \
+RUN curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable \
  && /home/runner/.cargo/bin/rustup component add clippy rustfmt
 USER root
 ENV PATH=/home/runner/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -90,7 +110,7 @@ USER runner
 ENV RUNNER_TOOL_CACHE={toolcache} AGENT_TOOLSDIRECTORY={toolcache} HOME=/home/runner
 WORKDIR /home/runner
 """
-RECIPE = "7"  # bump when DOCKERFILE changes so old images are rebuilt
+RECIPE = "8"  # bump when DOCKERFILE changes so old images are rebuilt
 
 
 class DockerError(RuntimeError):
@@ -131,11 +151,12 @@ UBUNTU_PREVIOUS = "24.04"
 def ubuntu_version(runs_on: Any) -> str:
     text = json.dumps(runs_on).lower()
     m = re.search(r"ubuntu-(\d\d\.\d\d)", text)
-    if m:
-        return m.group(1)
-    if AS_OF and AS_OF < UBUNTU_LATEST_SINCE:
+    v = m.group(1) if m else UBUNTU_PREVIOUS if AS_OF and AS_OF < UBUNTU_LATEST_SINCE else UBUNTU_LATEST
+    # Docker Desktop's x64 emulation cannot run Ubuntu 26.04's userland (its tar fails with "Function not
+    # implemented"), so an x64 confirmation of a 26.04 job runs on the 24.04 x64 image.
+    if emulating_x64() and v >= "26.04":
         return UBUNTU_PREVIOUS
-    return UBUNTU_LATEST
+    return v
 
 
 _IMAGE_LOCK = threading.Lock()
@@ -151,8 +172,8 @@ def ensure_runner_image(version: str, say: Callable[[str], None] = print) -> str
         if tag not in _VOLUMES_READY:
             # Docker fills an empty named volume from the image on first use; two containers doing that at
             # once race ("failed to mkdir ... file exists"), so fill them once here before jobs run in parallel.
-            args = ["run", "--rm"]
-            for vol, path in CACHE_VOLUMES.items():
+            args = ["run", "--rm", *(["--platform", PLATFORM.get()] if emulating_x64() else [])]
+            for vol, path in cache_volumes().items():
                 args += ["-v", f"{vol}:{path}"]
             _docker(*args, "--entrypoint", "true", tag, check=False, timeout=600)
             _VOLUMES_READY.add(tag)
@@ -160,20 +181,21 @@ def ensure_runner_image(version: str, say: Callable[[str], None] = print) -> str
 
 
 def _ensure_runner_image(version: str, say: Callable[[str], None]) -> str:
-    tag = f"preflight-runner:{version}"
+    x64 = emulating_x64()
+    tag = f"preflight-runner:{version}" + ("-amd64" if x64 else "")
     out = _docker("image", "inspect", "--format", '{{ index .Config.Labels "org.preflight.recipe" }}', tag, check=False)
     if out.strip() == RECIPE:
         return tag
     say(f"  building {tag} (once; a few minutes)...")
     dockerfile = DOCKERFILE.format(version=version, toolcache=TOOL_CACHE, recipe=RECIPE)
-    _docker("build", "-q", "-t", tag, "-", input=dockerfile, timeout=1800)
+    _docker("build", "-q", *(["--platform", "linux/amd64"] if x64 else []), "-t", tag, "-",
+            input=dockerfile, timeout=3600)
     return tag
 
 
 def arch() -> tuple[str, str]:
     """(runner.arch as GitHub spells it, download name used by most vendors)."""
-    m = platform.machine().lower()
-    if m in ("arm64", "aarch64"):
+    if host_is_arm() and not emulating_x64():
         return "ARM64", "arm64"
     return "X64", "x64"
 
@@ -452,8 +474,10 @@ class DockerJob:
             for vol in self.spec.get("volumes") or []:
                 args += ["-v", str(vol)]
         else:
-            for vol, path in CACHE_VOLUMES.items():
+            for vol, path in cache_volumes().items():
                 args += ["-v", f"{vol}:{path}"]
+        if emulating_x64():
+            args += ["--platform", "linux/amd64"]
         if self.artifacts:
             args += ["-v", f"{self.artifacts}:{self.artifact_root}"]
         for k, v in as_of_env().items():

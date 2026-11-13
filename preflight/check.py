@@ -41,6 +41,7 @@ class Plan:
     docker: bool = False
     base_sha: str | None = None   # merge base of the branch and its base, the PR's parent commit
     artifacts: str | None = None  # Docker volume the run's jobs share artifacts through
+    confirm_x64: bool = True      # on an ARM machine, confirm Docker failures under x64 emulation
 
     @property
     def to_run(self) -> list[PlannedJob]:
@@ -273,6 +274,33 @@ class _Active:
 def _run_one(p: PlannedJob, combo: dict[str, Any], ctx_values: dict[str, Any], root: Path, log: Path,
              plan: Plan, verbose: bool, snapshot: str, cancel: threading.Event, active: _Active,
              say, echo_prefix: str) -> JobResult:
+    """Run one job; on an ARM machine, confirm a failure under x64 emulation (GitHub's runners are x64)."""
+    res = _run_native(p, combo, ctx_values, root, log, plan, verbose, snapshot, cancel, active, say, echo_prefix)
+    if not (plan.docker and plan.confirm_x64 and dockermod.host_is_arm() and res.status in ("failed", "not-checked")
+            and not res.oom and not cancel.is_set()):
+        return res
+    why = "needs a tool with no ARM64 build" if res.status == "not-checked" else "failed on ARM64"
+    say(f"{echo_prefix}  ↻ {p.wf.name} / {res.label} {why}; running it under x64 emulation"
+        + ("" if res.status == "not-checked" else " to confirm"))
+    token = dockermod.PLATFORM.set("linux/amd64")
+    try:
+        x64 = _run_native(p, combo, ctx_values, root, log.with_name(log.stem + "-x64.log"), plan, verbose,
+                          snapshot, cancel, active, say, echo_prefix)
+    finally:
+        dockermod.PLATFORM.reset(token)
+    if res.status == "not-checked":
+        x64.note = "run under x64 emulation (no ARM64 build of a tool it needs)"
+        return x64
+    if x64.status == "passed":
+        x64.note = (f"failed on ARM64 ('{res.failed_step.name if res.failed_step else '?'}'), passed under x64 "
+                    "emulation like GitHub's runners")
+        return x64
+    return res
+
+
+def _run_native(p: PlannedJob, combo: dict[str, Any], ctx_values: dict[str, Any], root: Path, log: Path,
+                plan: Plan, verbose: bool, snapshot: str, cancel: threading.Event, active: _Active,
+                say, echo_prefix: str) -> JobResult:
     label = job_label(p.job, combo)
     if not plan.docker:
         return run_job(p.wf, p.job, combo, ctx_values, root, log, host_os(), echo=verbose,
@@ -417,6 +445,8 @@ def _execute(plan: Plan, root: Path, fail_fast: bool, verbose: bool, snapshot: s
                     else:
                         mark = {"passed": "✓", "not-checked": "–"}.get(res.status, "✗")
                         tail = f": '{res.failed_step.name}' {res.failed_step.detail}" if res.failed_step else ""
+                        if res.note:
+                            tail += f" ({res.note})"
                         print(f"  {mark} {p.wf.name} / {res.label} {res.status} in {res.seconds:.0f}s{tail}")
                     if res.status == "failed":
                         _print_log_tail(res.log_path)
@@ -482,7 +512,8 @@ def write_report(plan: Plan, results: list[JobResult], path: Path, root: Path) -
         "| --- | --- |",
     ]
     for r in results:
-        lines.append(f"| {r.workflow} / {r.label} | {'not checked (out of memory)' if r.oom else 'not checked (needs x64)' if r.status == 'not-checked' else r.status} |")
+        status = 'not checked (out of memory)' if r.oom else 'not checked (needs x64)' if r.status == 'not-checked' else r.status
+        lines.append(f"| {r.workflow} / {r.label} | {status}{f' ({r.note})' if r.note else ''} |")
     if plan.skipped:
         lines += ["", "Not run locally (left to GitHub):", ""]
         lines += [f"- {p.wf.name} / {p.job.id}: {p.reason}" for p in plan.skipped]
