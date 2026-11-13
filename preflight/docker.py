@@ -67,12 +67,22 @@ RUN a=$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/') \
  && v=$(curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | grep -o "node-v22[0-9.]*-linux-$a.tar.xz" | head -1) \
  && curl -fsSL "https://nodejs.org/dist/latest-v22.x/$v" | tar -xJ -C /usr/local --strip-components=1 \
  && node --version
+# GitHub's image ships Chrome and Firefox (Karma, Selenium, Playwright suites launch them). Google Chrome
+# has no Linux ARM64 build, so Chromium stands in under Chrome's names; it gets --no-sandbox because
+# containers cannot create the user namespaces its sandbox needs.
+RUN PLAYWRIGHT_BROWSERS_PATH=/opt/browsers npx -y playwright@1.48.2 install --with-deps chromium firefox \
+ && C=$(ls -d /opt/browsers/chromium-*/chrome-linux/chrome) \
+ && printf '#!/bin/sh\\nexec %s --no-sandbox "$@"\\n' "$C" > /usr/local/bin/google-chrome \
+ && chmod +x /usr/local/bin/google-chrome \
+ && for n in google-chrome-stable chromium chromium-browser; do ln -s /usr/local/bin/google-chrome /usr/local/bin/$n; done \
+ && ln -s $(ls -d /opt/browsers/firefox-*/firefox/firefox) /usr/local/bin/firefox \
+ && chmod -R a+rX /opt/browsers && rm -rf /root/.npm
 LABEL org.preflight.recipe="{recipe}"
 USER runner
 ENV RUNNER_TOOL_CACHE={toolcache} AGENT_TOOLSDIRECTORY={toolcache} HOME=/home/runner
 WORKDIR /home/runner
 """
-RECIPE = "5"  # bump when DOCKERFILE changes so old images are rebuilt
+RECIPE = "6"  # bump when DOCKERFILE changes so old images are rebuilt
 
 
 class DockerError(RuntimeError):

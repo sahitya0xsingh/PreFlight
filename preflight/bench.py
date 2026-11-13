@@ -468,9 +468,13 @@ def _github_infra(repo: str, url: str, cache: dict[str, str]) -> str:
         return cache[url]
     job_id = url.rstrip("/").rsplit("/", 1)[-1]
     try:
-        steps = (github.api(f"repos/{repo}/actions/jobs/{job_id}") or {}).get("steps") or []
+        job = github.api(f"repos/{repo}/actions/jobs/{job_id}") or {}
     except github.GitHubError:
-        steps = []
+        job = {}
+    steps = job.get("steps") or []
+    if job and not steps:
+        cache[url] = "GitHub's runner never started the job (no steps ran)"
+        return cache[url]
     first = next((st["name"] for st in steps if st.get("conclusion") == "failure"), "")
     if _SETUP_STEP.match(first):
         cache[url] = f"GitHub's machine-setup step '{first}' failed, before the check ran"
@@ -519,10 +523,12 @@ def _classified(repo: str) -> tuple[list[dict], list[dict], list[dict]]:
     cache_file = bench_dir(repo) / "github-infra.json"
     cache = json.loads(cache_file.read_text()) if cache_file.exists() else {}
     infra: list[dict] = []
-    for r in rows:   # passed here, failed on GitHub: did GitHub's runner fail rather than the code?
-        if r["local"] == "passed" and r["github"] == "failure" and r.get("url"):
+    for r in rows:   # failed on GitHub: did GitHub's runner fail rather than the code?
+        if r["github"] == "failure" and r.get("url") and r["local"] in ("passed", "failed"):
             why = _github_infra(repo, r["url"], cache)
-            if why:
+            # A local failure next to a GitHub runner problem is only set aside when GitHub never ran
+            # the job at all; otherwise both may have failed on the code.
+            if why and (r["local"] == "passed" or why.startswith("GitHub's runner never started")):
                 r["github"], r["reason"] = "infra-failure", why
                 infra.append(r)
     cache_file.write_text(json.dumps(cache, indent=1))

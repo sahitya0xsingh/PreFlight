@@ -53,6 +53,7 @@ KNOWN: dict[str, tuple[str, str]] = {
     "docker/setup-buildx-action": ("needs-docker", "sets up Docker Buildx"),
     "docker/setup-qemu-action": ("needs-docker", "sets up QEMU for Docker"),
     "addnab/docker-run-action": ("needs-docker", "runs a Docker container"),
+    "zizmorcore/zizmor-action": ("needs-docker", "runs zizmor in a Docker container"),
     "marocchino/sticky-pull-request-comment": ("skip", "comments on the PR"),
 }
 
