@@ -1,28 +1,27 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="128" height="128" fill="none">
   <title>PreFlight</title>
   <defs>
-    <linearGradient id="g" x1="10" y1="52" x2="54" y2="10" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#eef6ff"/><stop offset=".5" stop-color="#5ee4ff"/><stop offset="1" stop-color="#5b7cff"/>
+    <linearGradient id="g" x1="18" y1="44" x2="54" y2="12" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/><stop offset=".55" stop-color="#bfe0ee"/><stop offset="1" stop-color="#8e9ad6"/>
     </linearGradient>
-    <linearGradient id="r" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#5ee4ff"/><stop offset="1" stop-color="#5b7cff" stop-opacity=".2"/>
+    <linearGradient id="r" x1="14" y1="52" x2="50" y2="16" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8e9ad6" stop-opacity=".15"/><stop offset="1" stop-color="#bfe0ee" stop-opacity=".9"/>
     </linearGradient>
-    <radialGradient id="h" cx="32" cy="32" r="30" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#5ee4ff" stop-opacity=".28"/><stop offset="1" stop-color="#5b7cff" stop-opacity="0"/>
+    <linearGradient id="t" x1="0" y1="0" x2="0" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#111a29"/><stop offset="1" stop-color="#05070b"/>
+    </linearGradient>
+    <linearGradient id="e" x1="0" y1="4" x2="64" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#bfe0ee" stop-opacity=".45"/><stop offset=".5" stop-color="#bfe0ee" stop-opacity=".06"/><stop offset="1" stop-color="#8e9ad6" stop-opacity=".3"/>
+    </linearGradient>
+    <radialGradient id="s" cx="44" cy="20" r="30" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#bfe0ee" stop-opacity=".22"/><stop offset="1" stop-color="#bfe0ee" stop-opacity="0"/>
     </radialGradient>
   </defs>
-  <rect width="64" height="64" rx="16" fill="#03060c"/>
-  <circle cx="32" cy="32" r="30" fill="url(#h)"/>
-  <g>
-    <circle cx="32" cy="32" r="27" stroke="url(#r)" stroke-width="1.6" stroke-dasharray="5 4.2"/>
-    <circle cx="32" cy="5" r="2.6" fill="#5b7cff"/>
-    <animateTransform attributeName="transform" type="rotate" from="0 32 32" to="360 32 32" dur="14s" repeatCount="indefinite"/>
-  </g>
-  <path d="M17 52h6M29 52h6M41 52h6" stroke="#46526a" stroke-width="2.2" stroke-linecap="round"/>
-  <circle cx="11" cy="38" r="1.5" fill="#5ee4ff" opacity=".8"/><circle cx="7" cy="42" r="1.1" fill="#5ee4ff" opacity=".55"/><circle cx="4" cy="45.5" r=".8" fill="#5ee4ff" opacity=".3"/>
-  <path d="M16 33l10 10L50 17" stroke="url(#g)" stroke-width="5.4" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M37.5 16.6h13v13" stroke="#5b7cff" stroke-width="5.4" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M54 9.5l1.2 2.8 2.8 1.2-2.8 1.2-1.2 2.8-1.2-2.8-2.8-1.2 2.8-1.2z" fill="#eef6ff"/>
-  <circle cx="16" cy="33" r="4.6" fill="#03060c" stroke="#eef6ff" stroke-width="2.6"/>
-  <circle cx="16" cy="33" r="1.6" fill="#5ee4ff"/>
+  <rect x="2" y="2" width="60" height="60" rx="17" fill="url(#t)"/>
+  <rect x="2" y="2" width="60" height="60" rx="17" fill="url(#s)"/>
+  <rect x="2.5" y="2.5" width="59" height="59" rx="16.5" stroke="url(#e)"/>
+  <path d="M47.97 28.19A17 17 0 1 1 37.81 18.03" stroke="url(#r)" stroke-width="3" stroke-linecap="round"/>
+  <path d="M21 33.5l8 8L52 15" stroke="url(#g)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M43.5 15H52v8.5" stroke="#8e9ad6" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="21" cy="33.5" r="4.2" fill="#070b12" stroke="#ffffff" stroke-width="2.4"/>
 </svg>

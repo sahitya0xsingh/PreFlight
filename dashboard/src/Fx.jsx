@@ -12,32 +12,49 @@ export function AetherBg() {
   return <canvas ref={ref} className="aether" aria-hidden="true" />
 }
 
-// Intro: the logo, a counter to 100, then a frosted curtain lifts. Skipped for reduced motion.
+// Intro: the mark draws itself while the counter walks through what PreFlight does, then an iris closes
+// in on the logo to reveal the page. Shown once per browser session; skipped for reduced motion.
+const STAGES = ['Reading workflows', 'Rebuilding merge commits', 'Starting Ubuntu containers', 'Comparing with GitHub']
+
+function seenIntro() {
+  try { return sessionStorage.getItem('pf-intro') === '1' } catch { return false }
+}
+
 export function Preloader({ ready }) {
   const [n, setN] = useState(0)
-  const [gone, setGone] = useState(reducedMotion())
+  const [phase, setPhase] = useState(reducedMotion() || seenIntro() ? 'gone' : 'run')   // run → out → gone
   useEffect(() => {
-    if (gone) return
+    if (phase !== 'run') return
     let raf = 0
     const t0 = performance.now()
     const tick = (now) => {
-      const k = Math.min(1, (now - t0) / 1500)
-      setN(Math.round(100 * (1 - Math.pow(1 - k, 3))))
-      if (k < 1 || !ready) raf = requestAnimationFrame(tick)
-      else setTimeout(() => setGone(true), 900)
+      const k = Math.min(1, (now - t0) / 1700)
+      setN(Math.round(100 * (1 - Math.pow(1 - k, 2.4))))
+      if (k < 1 || !ready) { raf = requestAnimationFrame(tick); return }
+      try { sessionStorage.setItem('pf-intro', '1') } catch { /* private mode */ }
+      setTimeout(() => setPhase('out'), 260)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [ready, gone])
-  if (gone) return null
-  const done = n >= 100 && ready
+  }, [ready, phase])
+  useEffect(() => {
+    if (phase !== 'out') return
+    const t = setTimeout(() => setPhase('gone'), 1050)
+    return () => clearTimeout(t)
+  }, [phase])
+  if (phase === 'gone') return null
+  const stage = STAGES[Math.min(STAGES.length - 1, Math.floor((n / 100) * STAGES.length))]
   return (
-    <div className={`preloader ${done ? 'lift' : ''}`} aria-hidden="true">
+    <div className={`preloader ${phase === 'out' ? 'out' : ''}`} aria-hidden="true">
+      <div className="pre-grid" />
       <div className="pre-inner">
-        <Logo size={72} className="big" />
-        <div className="pre-count">{String(n).padStart(3, '0')}</div>
+        <div className="pre-mark"><Logo size={104} className="big intro" /></div>
+        <div className="pre-word">PreFlight</div>
+        <div className="pre-row">
+          <span className="pre-stage" key={stage}>{stage}</span>
+          <span className="pre-count">{String(n).padStart(3, '0')}</span>
+        </div>
         <div className="pre-line"><i style={{ transform: `scaleX(${n / 100})` }} /></div>
-        <div className="pre-cap">REPLAYING PULL REQUESTS</div>
       </div>
     </div>
   )
