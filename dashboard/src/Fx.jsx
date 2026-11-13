@@ -12,49 +12,82 @@ export function AetherBg() {
   return <canvas ref={ref} className="aether" aria-hidden="true" />
 }
 
-// Intro: the mark draws itself while the counter walks through what PreFlight does, then an iris closes
-// in on the logo to reveal the page. Shown once per browser session; skipped for reduced motion.
-const STAGES = ['Reading workflows', 'Rebuilding merge commits', 'Starting Ubuntu containers', 'Comparing with GitHub']
+// Intro: a pre-flight check. A four-stage pipeline lights up while a CI-style log streams real job runs
+// from the benchmark (✓ agreed with GitHub, ✗ did not); then the mark's arrow takes off toward the top-right
+// corner and the screen wipes away behind it. Once per browser session; skipped for reduced motion.
+const STAGES = ['Checkout', 'Setup', 'Test', 'Compare']
+const FALLBACK = ['build', 'lint', 'tests (3.12)', 'typing', 'coverage', 'checkstyle', 'error-prone', 'Node.js 22']
 
 function seenIntro() {
   try { return sessionStorage.getItem('pf-intro') === '1' } catch { return false }
 }
 
-export function Preloader({ ready }) {
-  const [n, setN] = useState(0)
-  const [phase, setPhase] = useState(reducedMotion() || seenIntro() ? 'gone' : 'run')   // run → out → gone
+export function Preloader({ ready, runs = [], total = 0 }) {
+  const [k, setK] = useState(0)                 // 0..1 progress
+  const [phase, setPhase] = useState(reducedMotion() || seenIntro() ? 'gone' : 'run')   // run → launch → gone
+  const start = useRef(0)
   useEffect(() => {
     if (phase !== 'run') return
     let raf = 0
-    const t0 = performance.now()
+    if (!start.current) start.current = performance.now()   // keep the clock when `ready` flips mid-way
+    const t0 = start.current
     const tick = (now) => {
-      const k = Math.min(1, (now - t0) / 1700)
-      setN(Math.round(100 * (1 - Math.pow(1 - k, 2.4))))
-      if (k < 1 || !ready) { raf = requestAnimationFrame(tick); return }
+      const p = Math.min(1, (now - t0) / 2100)
+      setK(p)
+      if (p < 1 || !ready) { raf = requestAnimationFrame(tick); return }
       try { sessionStorage.setItem('pf-intro', '1') } catch { /* private mode */ }
-      setTimeout(() => setPhase('out'), 260)
+      setTimeout(() => setPhase('launch'), 180)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
   }, [ready, phase])
   useEffect(() => {
-    if (phase !== 'out') return
-    const t = setTimeout(() => setPhase('gone'), 1050)
+    if (phase !== 'launch') return
+    const t = setTimeout(() => setPhase('gone'), 1300)
     return () => clearTimeout(t)
   }, [phase])
   if (phase === 'gone') return null
-  const stage = STAGES[Math.min(STAGES.length - 1, Math.floor((n / 100) * STAGES.length))]
+
+  const ease = 1 - Math.pow(1 - k, 2)
+  const lines = runs.length ? runs : FALLBACK.map((job) => ({ repo: 'preflight', job, o: 'agree', s: 0 }))
+  const shown = Math.min(lines.length, Math.floor(ease * lines.length * 0.6) + 1)
+  const log = lines.slice(Math.max(0, shown - 7), shown)
+  const stageAt = ease * STAGES.length
   return (
-    <div className={`preloader ${phase === 'out' ? 'out' : ''}`} aria-hidden="true">
+    <div className={`preloader ${phase}`} aria-hidden="true">
       <div className="pre-grid" />
+      <div className="pre-streak" />
       <div className="pre-inner">
-        <div className="pre-mark"><Logo size={104} className="big intro" /></div>
-        <div className="pre-word">PreFlight</div>
-        <div className="pre-row">
-          <span className="pre-stage" key={stage}>{stage}</span>
-          <span className="pre-count">{String(n).padStart(3, '0')}</span>
+        <div className="pre-mark"><Logo size={88} className="big intro" /></div>
+
+        <div className="pre-pipe">
+          <div className="pre-track"><i style={{ transform: `scaleX(${Math.min(1, ease * 1.04)})` }} /></div>
+          {STAGES.map((st, i) => {
+            const state = stageAt >= i + 1 ? 'done' : stageAt >= i ? 'live' : ''
+            return (
+              <div key={st} className={`pre-node ${state}`} style={{ left: `${(i / (STAGES.length - 1)) * 100}%` }}>
+                <span className="dot">{state === 'done' ? '✓' : ''}</span>
+                <span className="lbl">{st}</span>
+              </div>
+            )
+          })}
         </div>
-        <div className="pre-line"><i style={{ transform: `scaleX(${n / 100})` }} /></div>
+
+        <div className="pre-log">
+          {log.map((x, i) => (
+            <div key={shown - log.length + i} className={`pre-ln ${x.o}`} style={{ opacity: 0.25 + (0.75 * (i + 1)) / log.length }}>
+              <span className="m">{x.o === 'agree' ? '✓' : x.o === 'disagree' ? '✗' : '•'}</span>
+              <span className="r">{x.repo}</span>
+              <span className="j">{x.job}</span>
+              <span className="t">{x.s ? `${Math.round(x.s)}s` : ''}</span>
+            </div>
+          ))}
+        </div>
+
+        <div className="pre-row">
+          <span>{phase === 'launch' ? 'Cleared for take-off' : 'Pre-flight check'}</span>
+          <span className="pre-count">{Math.round(ease * total)}<em>/{total || '—'} job runs</em></span>
+        </div>
       </div>
     </div>
   )

@@ -341,6 +341,12 @@ export default function App() {
   const sample = all.filter((r) => r.set !== 'authors')
   const mine = all.filter((r) => r.set === 'authors')
   const t = totals(all)
+  // A shuffled sample of real job runs for the loading screen's log.
+  const preRuns = useMemo(() => {
+    const xs = all.flatMap((r) => r.runs.map((x) => ({ repo: r.repo.split('/')[1], job: x.job, o: outcome(x), s: x.seconds })))
+    for (let i = xs.length - 1; i > 0; i--) { const j = (i * 7919) % (i + 1); [xs[i], xs[j]] = [xs[j], xs[i]] }
+    return xs.slice(0, 60)
+  }, [data])
   const shards = useMemo(
     () => all.flatMap((r) => r.runs.map((x) => ({
       o: r.set === 'authors' && outcome(x) === 'agree' ? 'mine' : outcome(x),
@@ -351,7 +357,7 @@ export default function App() {
   return (
     <>
       <AetherBg />
-      <Preloader ready={!!data || !!err} />
+      <Preloader ready={!!data || !!err} runs={preRuns} total={t.compared} />
       <Cursor />
       <div className="grain" aria-hidden="true" />
       <svg width="0" height="0" style={{ position: 'absolute' }} aria-hidden="true">
