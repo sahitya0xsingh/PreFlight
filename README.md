@@ -33,10 +33,18 @@ Docker, and compares each job's pass/fail with GitHub's.
 | [encode/httpx](https://github.com/encode/httpx) | Python (pip) | 15 | 48 | 25.0% | 8/8 | 36 |
 | **All six** | | **106** | **416** | **91.1%** | **90/91** | **36** |
 
-Without httpx, the other five agree on 368 of 369 job runs (99.7%). httpx is still being worked on: every one
-of its 36 false alarms is the same test, `test_write_timeout[trio]`, which uploads 100 MB under a 1 µs write
-timeout; here the upload finishes before the timeout can fire. It fails the same way under x64 emulation and with
-a quarter of a CPU, so it is not the architecture or CPU speed; the cause is not found yet.
+Without httpx, the other five agree on 368 of 369 job runs (99.7%). httpx's 36 false alarms are all one test,
+`test_write_timeout[trio]`, which uploads 100 MB over loopback under a 1 µs write timeout and expects the write to
+block. Whether it blocks depends on the host's Linux kernel, which a container cannot change:
+
+| Where the test ran | Kernel | Result |
+| --- | --- | --- |
+| GitHub `ubuntu-24.04` runners (the PRs replayed here, March–July 2026) | Ubuntu 24.04 kernel | passes |
+| GitHub `ubuntu-26.04` runners (httpx's own CI from October 2026) | Ubuntu 26.04 kernel | **fails** |
+| PreFlight in Docker Desktop (arm64 or x64 emulation, any CPU limit) | Linux 6.10 | **fails** |
+
+The dependencies (resolved as of each PR's date) and the CPython patch match GitHub's, so the replays are faithful
+except for the kernel; on today's GitHub runners PreFlight and GitHub agree on this test.
 
 Coverage (the share of GitHub's jobs PreFlight can run on a Mac) is 85–100% for most projects and 55% for Express,
 whose test matrix runs every Node.js version on Windows too; Windows and macOS jobs stay on GitHub.
