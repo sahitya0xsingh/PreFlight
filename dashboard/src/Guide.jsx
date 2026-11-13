@@ -11,7 +11,7 @@ const TABS = [
       {
         title: 'Install',
         text: 'Python 3.10+, git and the GitHub CLI (`gh auth login`) are all you need. Docker is optional but recommended.',
-        cmd: 'pip install git+https://github.com/sahitya0xsingh/preflight',
+        cmd: 'pip install git+https://github.com/sahitya0xsingh/PreFlight',
       },
       {
         title: 'Learn the org once',

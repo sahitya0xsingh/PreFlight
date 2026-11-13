@@ -18,7 +18,7 @@ Skip the hook once with `PREFLIGHT_SKIP=1 git push` or `git push --no-verify`.
 
 ## Results
 
-**[Live dashboard →](https://sahitya0xsingh.github.io/preflight/)** · **[Step-by-step guide →](https://sahitya0xsingh.github.io/preflight/#guide)**
+**[Live dashboard →](https://sahitya0xsingh.github.io/PreFlight/)** · **[Step-by-step guide →](https://sahitya0xsingh.github.io/PreFlight/#guide)**
 
 `preflight bench` replays real pull requests: it rebuilds the merge commit GitHub tested, runs the jobs in
 Docker, and compares each job's pass/fail with GitHub's.
@@ -27,11 +27,21 @@ Docker, and compares each job's pass/fail with GitHub's.
 | --- | --- | --- | --- | --- | --- | --- |
 | [checkstyle/checkstyle](https://github.com/checkstyle/checkstyle) | Java (Maven) | 25 | 78 | **98.7%** | 25/26 | 0 |
 | [pallets/flask](https://github.com/pallets/flask) | Python (uv, tox) | 20 | 117 | **100%** | 13/13 | 0 |
-| [expressjs/express](https://github.com/expressjs/express) | JavaScript (Node.js, npm) | 20 | 114 | **100%** | 33/33 | 0 |
-| **All three** | | **65** | **309** | **99.7%** | **71/72** | **0** |
+| [expressjs/express](https://github.com/expressjs/express) | JavaScript (npm) | 20 | 114 | **100%** | 33/33 | 0 |
+| [axios/axios](https://github.com/axios/axios) | JavaScript (npm, Karma, vitest) | 11 | 25 | **100%** | 9/9 | 0 |
+| [pmndrs/zustand](https://github.com/pmndrs/zustand) | TypeScript / React (pnpm) | 15 | 34 | **100%** | 2/2 | 0 |
+| [encode/httpx](https://github.com/encode/httpx) | Python (pip) | 15 | 48 | 25.0% | 8/8 | 36 |
+| **All six** | | **106** | **416** | **91.1%** | **90/91** | **36** |
 
-Coverage (the share of GitHub's jobs PreFlight can run on a Mac) is 88% for checkstyle and Flask and 55% for
-Express, whose test matrix runs every Node.js version on Windows too; Windows and macOS jobs stay on GitHub.
+Without httpx, the other five agree on 368 of 369 job runs (99.7%). httpx is still being worked on: every one
+of its 36 false alarms is the same test, `test_write_timeout[trio]`, which uploads 100 MB under a 1 µs write
+timeout; here the upload finishes before the timeout can fire. It fails the same way under x64 emulation and with
+a quarter of a CPU, so it is not the architecture or CPU speed; the cause is not found yet.
+
+Coverage (the share of GitHub's jobs PreFlight can run on a Mac) is 85–100% for most projects and 55% for Express,
+whose test matrix runs every Node.js version on Windows too; Windows and macOS jobs stay on GitHub.
+
+Run `preflight bench --summary` to print this table from the saved results.
 
 The dashboard lists every compared job run with a link to GitHub's own job page. Rebuild its data with
 `npm --prefix dashboard run data` after a benchmark.
@@ -66,6 +76,10 @@ preflight install-hook --docker        # the same, before every push
 - `upload-artifact` / `download-artifact` pass files between the jobs of a run (through a Docker volume kept for
   that run, one folder per workflow), so a `coverage` job that merges its test jobs' reports works as on GitHub.
 - A matrix whose `runs-on` reads the matrix (`${{ matrix.os }}`) is split per runner: the Linux entries run here.
+- The runner image follows GitHub's where jobs depend on it: Node.js on `PATH`, Chrome and Firefox (Chromium stands
+  in for Chrome on ARM64), `rustup` with stable Rust, and Maven. `localhost` maps to 127.0.0.1 only, as on GitHub.
+- Tool versions are cached across runs, but each job gets its own copy of Python and Node, so packages one job
+  installs never leak into the next (on GitHub every job starts from a clean tool cache).
 - Jobs that need Windows or macOS runners, secrets, or the PR itself are still left to GitHub. On an ARM Mac, a
   tool version with no ARM64 build (Node.js 0.12, …) is reported as not checked rather than failed.
 - Each job sees 4 CPUs, like GitHub's standard runner. A job the kernel kills for want of memory is run again on
@@ -93,7 +107,13 @@ disagreement with GitHub's job link and the local failing step.
 preflight bench --repo checkstyle/checkstyle --add-failures 8   # add PRs whose code failed a job PreFlight can run
 preflight bench --repo checkstyle/checkstyle --replay           # after a fix: run only the disagreeing job runs again
 preflight bench --repo checkstyle/checkstyle --replan           # after a verdict change: re-plan saved cases, no jobs run
+preflight bench --repo checkstyle/checkstyle --authors me,me-alt # only these people's PRs, kept apart from the sample
+preflight bench --summary                                        # one table across every benchmarked repo
+preflight bench --export dashboard/public/results.json           # data for the dashboard
 ```
+
+A replay installs what GitHub installed when the PR ran, not what exists today: version ranges such as `26.x` or
+`3.12` resolve to the newest release on the PR's date, and pip, uv and npm only see packages published before it.
 
 Some results are kept out of the agreement figure and listed on their own, so they neither help nor hurt it:
 

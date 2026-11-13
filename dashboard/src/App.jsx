@@ -164,7 +164,7 @@ function Hero({ t, shards, theme }) {
           <span>{t.cases} PULL REQUESTS</span><span>{t.caught}/{t.failed} FAILURES CAUGHT</span><span>{t.falseAlarms} FALSE ALARMS</span>
         </div>
         <div className="cta">
-          <a className="btn primary" href="https://github.com/sahitya0xsingh/preflight" target="_blank" rel="noreferrer">View on GitHub ↗</a>
+          <a className="btn primary" href="https://github.com/sahitya0xsingh/PreFlight" target="_blank" rel="noreferrer">View on GitHub ↗</a>
           <a className="btn" href="#guide">How to use it</a>
         </div>
       </div>
@@ -394,7 +394,7 @@ export default function App() {
           <a href="#ledger">Ledger</a>
           <a href="#guide">Guide</a>
           <ThemePicker theme={theme} setTheme={setTheme} />
-          <a className="gh" href="https://github.com/sahitya0xsingh/preflight" target="_blank" rel="noreferrer">GitHub ↗</a>
+          <a className="gh" href="https://github.com/sahitya0xsingh/PreFlight" target="_blank" rel="noreferrer">GitHub ↗</a>
         </div>
       </nav>
       <main id="top">
@@ -412,7 +412,7 @@ export default function App() {
             <Guide Reveal={Reveal} Title={Title} />
             <footer>
               <span>Built by <a href="https://github.com/sahitya0xsingh" target="_blank" rel="noreferrer">Sahitya Singh</a></span>
-              <span className="mono">pip install git+https://github.com/sahitya0xsingh/preflight</span>
+              <span className="mono">pip install git+https://github.com/sahitya0xsingh/PreFlight</span>
               <span>Data from <code>preflight bench</code>, {new Date(data.generated).toLocaleDateString()}</span>
             </footer>
           </>

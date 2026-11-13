@@ -7,7 +7,7 @@ name = "preflight-ci"
 version = "0.1.0"
 description = "Learn a GitHub org's CI, run it locally, and push only when it passes."
 readme = "README.md"
-urls = { Homepage = "https://github.com/sahitya0xsingh/preflight", Dashboard = "https://sahitya0xsingh.github.io/preflight/" }
+urls = { Homepage = "https://github.com/sahitya0xsingh/PreFlight", Dashboard = "https://sahitya0xsingh.github.io/PreFlight/" }
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = ["PyYAML>=6"]
