@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { mountCrystal } from './Crystal.js'
+import Guide from './Guide.jsx'
 
 const ACCOUNTS = ['sahitya0xsingh', 'Sahitya0805']
 const LANG = {
@@ -117,7 +118,7 @@ function Hero({ t, shards }) {
         </div>
         <div className="cta">
           <a className="btn primary" href="https://github.com/sahitya0xsingh/preflight" target="_blank" rel="noreferrer">View on GitHub ↗</a>
-          <a className="btn" href="#method">How it's measured</a>
+          <a className="btn" href="#guide">How to use it</a>
         </div>
       </div>
       <div className="legend" aria-hidden="true">
@@ -329,6 +330,7 @@ export default function App() {
           <a href="#projects">Benchmark</a>
           <a href="#method">Method</a>
           <a href="#ledger">Ledger</a>
+          <a href="#guide">Guide</a>
           <a className="gh" href="https://github.com/sahitya0xsingh/preflight" target="_blank" rel="noreferrer">GitHub ↗</a>
         </div>
       </nav>
@@ -342,6 +344,7 @@ export default function App() {
             <Projects repos={sample} />
             <Method />
             <Ledger repos={all} />
+            <Guide Reveal={Reveal} />
             <footer>
               <span>Built by <a href="https://github.com/sahitya0xsingh" target="_blank" rel="noreferrer">Sahitya Singh</a></span>
               <span className="mono">pip install git+https://github.com/sahitya0xsingh/preflight</span>
