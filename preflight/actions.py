@@ -32,7 +32,6 @@ KNOWN: dict[str, tuple[str, str]] = {
     "actions/setup-dotnet": ("tool", "dotnet"),
     "gradle/actions/setup-gradle": ("noop", "gradle wrapper used directly"),
     "gradle/gradle-build-action": ("noop", "gradle wrapper used directly"),
-    "pnpm/action-setup": ("tool", "pnpm"),
     "astral-sh/setup-uv": ("tool", "uv"),
     "actions/github-script": ("skip", "calls the GitHub API"),
     "actions/dependency-review-action": ("skip", "diffs the PR's dependencies through GitHub's API"),
