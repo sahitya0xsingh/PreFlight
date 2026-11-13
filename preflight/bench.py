@@ -124,13 +124,18 @@ def sample_cases(repo: str, count: int, failing_share: float, pages: int = 5, sk
             wf = Path(r["path"]).name
             if wf not in latest or r["run_attempt"] > latest[wf]["run_attempt"] or r["id"] > latest[wf]["id"]:
                 latest[wf] = r
-        if len(latest) < (1 if AUTHORS else 2):   # one workflow only: a docs-only or partial run
+        if not latest:
             continue
         candidates.append(Case(sha=sha, title=runs[0].get("display_title", ""), created_at=first,
                                failed=any(r["conclusion"] == "failure" for r in latest.values()),
                                workflows=sorted(latest), author=(runs[0].get("actor") or {}).get("login", "")))
         candidates[-1]._runs = list(latest.values())  # type: ignore[attr-defined]
     candidates.sort(key=lambda c: c.created_at, reverse=True)
+    # A PR that ran one workflow is usually a docs-only or partial run, so prefer PRs that ran two or
+    # more; repos whose CI is one workflow (httpx: test-suite.yml) fall back to one.
+    most = max((len(c.workflows) for c in candidates), default=0)
+    min_wf = 1 if AUTHORS or most < 2 else 2
+    candidates = [c for c in candidates if len(c.workflows) >= min_wf]
     want_fail = round(count * failing_share)
     want = {True: want_fail, False: count - want_fail}
     if AUTHORS:   # someone's own PRs: take them as they come, failed or not
@@ -148,7 +153,7 @@ def sample_cases(repo: str, count: int, failing_share: float, pages: int = 5, sk
             if jobs:   # a run with no jobs never started (workflow refused or invalid): nothing to compare
                 runs.append(r)
                 c.jobs += jobs
-        if len(runs) < (1 if AUTHORS else 2):
+        if len(runs) < min_wf:
             continue
         c.workflows = sorted(Path(r["path"]).name for r in runs)
         failed = any(r["conclusion"] == "failure" for r in runs)
