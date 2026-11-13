@@ -131,9 +131,21 @@ _IMAGE_LOCK = threading.Lock()
 _TAR_LOCK = threading.Lock()
 
 
+_VOLUMES_READY: set[str] = set()
+
+
 def ensure_runner_image(version: str, say: Callable[[str], None] = print) -> str:
     with _IMAGE_LOCK:  # parallel jobs must not build the same image twice
-        return _ensure_runner_image(version, say)
+        tag = _ensure_runner_image(version, say)
+        if tag not in _VOLUMES_READY:
+            # Docker fills an empty named volume from the image on first use; two containers doing that at
+            # once race ("failed to mkdir ... file exists"), so fill them once here before jobs run in parallel.
+            args = ["run", "--rm"]
+            for vol, path in CACHE_VOLUMES.items():
+                args += ["-v", f"{vol}:{path}"]
+            _docker(*args, "--entrypoint", "true", tag, check=False, timeout=600)
+            _VOLUMES_READY.add(tag)
+        return tag
 
 
 def _ensure_runner_image(version: str, say: Callable[[str], None]) -> str:
