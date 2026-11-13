@@ -108,47 +108,13 @@ function Ring({ value, size = 92 }) {
   )
 }
 
-const THEMES = [
-  ['ice', 'Glacier', 'linear-gradient(135deg, #8de9ff, #5b7cff)'],
-  ['aurora', 'Aurora', 'linear-gradient(135deg, #2ef2b8, #9b6bff)'],
-  ['nebula', 'Nebula', 'linear-gradient(135deg, #c38bff, #ff5fb7)'],
-  ['solar', 'Solar', 'linear-gradient(135deg, #ffb547, #ff5e7e)'],
-  ['paper', 'Paper (light)', 'linear-gradient(135deg, #f6f4ef 50%, #2556e6 50%)'],
-]
-
-function useTheme() {
-  const [theme, setTheme] = useState(() => {
-    try {
-      const t = localStorage.getItem('pf-theme')
-      return ['ice', 'aurora', 'nebula', 'solar', 'paper'].includes(t) ? t : 'ice'
-    } catch { return 'ice' }
-  })
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme
-    try { localStorage.setItem('pf-theme', theme) } catch { /* private mode: fine */ }
-  }, [theme])
-  return [theme, setTheme]
-}
-
-function ThemePicker({ theme, setTheme }) {
-  return (
-    <div className="themes" role="radiogroup" aria-label="Colour theme">
-      {THEMES.map(([id, name, c]) => (
-        <button key={id} role="radio" aria-checked={theme === id} aria-label={name} title={name}
-          className={`sw ${theme === id ? 'on' : ''}`} style={{ '--c': c }} onClick={() => setTheme(id)} />
-      ))}
-    </div>
-  )
-}
-
-function Hero({ t, shards, theme }) {
+function Hero({ t, shards }) {
   const canvas = useRef(null)
   const crystal = useRef(null)
   useEffect(() => {
-    crystal.current = mountCrystal(canvas.current, shards, { reduced: reducedMotion(), palette: theme })
+    crystal.current = mountCrystal(canvas.current, shards, { reduced: reducedMotion(), palette: 'ice' })
     return () => crystal.current.dispose()
   }, [shards])
-  useEffect(() => { crystal.current?.setPalette(theme) }, [theme])
   return (
     <section className="hero">
       <canvas ref={canvas} className="crystal" aria-label={`3D sphere of ${shards.length} job names, one per compared job run`} />
@@ -352,7 +318,6 @@ function Ledger({ repos }) {
 export default function App() {
   const [data, setData] = useState(null)
   const [err, setErr] = useState('')
-  const [theme, setTheme] = useTheme()
   useTilt()
   useEffect(() => {
     fetch('./results.json')
@@ -393,7 +358,6 @@ export default function App() {
           <a href="#method">Method</a>
           <a href="#ledger">Ledger</a>
           <a href="#guide">Guide</a>
-          <ThemePicker theme={theme} setTheme={setTheme} />
           <a className="gh" href="https://github.com/sahitya0xsingh/PreFlight" target="_blank" rel="noreferrer">GitHub ↗</a>
         </div>
       </nav>
@@ -402,7 +366,7 @@ export default function App() {
         {!data && !err && <p className="status">Loading results…</p>}
         {all.length > 0 && (
           <>
-            <Hero t={t} shards={shards} theme={theme} />
+            <Hero t={t} shards={shards} />
             <Marquee items={[...new Set(all.flatMap((r) => r.runs.map((x) => x.job)))].slice(0, 40)} />
             <Mine repos={mine} />
             <Projects repos={sample} />

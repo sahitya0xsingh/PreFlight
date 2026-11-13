@@ -6,10 +6,6 @@ import * as THREE from 'three'
 // Colours per theme (the page's palette picker); disagree/excluded keep their meaning everywhere.
 export const PALETTES = {
   ice: { agree: '#cfe2ee', mine: '#a3d2e6', dust: '#2f4058', core: '#8e9ad6', disagree: '#e8786e', excluded: '#e2bf86' },
-  aurora: { agree: '#d2ebe2', mine: '#9cd6c2', dust: '#3a3f5c', core: '#ad9fdc', disagree: '#e8786e', excluded: '#e2bf86' },
-  nebula: { agree: '#e6dcf3', mine: '#e2a9c4', dust: '#3f3657', core: '#c3b0e6', disagree: '#ea7468', excluded: '#e6c58e' },
-  solar: { agree: '#f2e4d1', mine: '#e5c393', dust: '#56403a', core: '#dfa1a0', disagree: '#e8655a', excluded: '#efd59a' },
-  paper: { agree: '#1e2737', mine: '#4a63ad', dust: '#b9bdc6', core: '#7d64b0', disagree: '#c2453a', excluded: '#a77a2c', light: true },
 }
 
 const CODE = [

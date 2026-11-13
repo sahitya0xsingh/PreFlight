@@ -12,32 +12,6 @@
   --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
   color-scheme: dark;
 }
-:root[data-theme="aurora"] {   /* sage mist into lilac */
-  --bg: #040908; --bg-rgb: 4, 9, 8; --ink: #edf6f2; --lede: #b8cdc5; --muted: #7d958c; --faint: #3f524c;
-  --ice: #b4e2d2; --ice-2: #9cd6c2; --accent-rgb: 156, 214, 194;
-  --accent-2: #ad9fdc; --accent2-rgb: 173, 159, 220; --line-rgb: 180, 225, 210;
-  --agree: #dcf0e8; --mega-1: #ffffff; --mega-2: #b4e2d2; --mega-3: #ad9fdc;
-}
-:root[data-theme="nebula"] {   /* dusk: heather into rose quartz */
-  --bg: #08060f; --bg-rgb: 8, 6, 15; --ink: #f2eef8; --lede: #c8bfd8; --muted: #8e85a3; --faint: #4b4560;
-  --ice: #d2c2ec; --ice-2: #c3b0e6; --accent-rgb: 195, 176, 230;
-  --accent-2: #e2a9c4; --accent2-rgb: 226, 169, 196; --line-rgb: 210, 195, 235;
-  --agree: #ece4f7; --mega-1: #ffffff; --mega-2: #d2c2ec; --mega-3: #e2a9c4;
-}
-:root[data-theme="solar"] {    /* candlelight: champagne into dusty rose */
-  --bg: #0a0706; --bg-rgb: 10, 7, 6; --ink: #f7f1ea; --lede: #d6c7b8; --muted: #a08f80; --faint: #5c4d42;
-  --ice: #ecd2ac; --ice-2: #e5c393; --accent-rgb: 229, 195, 147;
-  --accent-2: #dfa1a0; --accent2-rgb: 223, 161, 160; --line-rgb: 236, 214, 190;
-  --agree: #f6ead9; --mega-1: #ffffff; --mega-2: #ecd2ac; --mega-3: #dfa1a0;
-}
-:root[data-theme="paper"] {    /* light: ink on warm paper, slate blue into dusty violet */
-  --bg: #f5f3ee; --bg-rgb: 245, 243, 238; --ink: #141821; --lede: #3c4453; --muted: #5d6676; --faint: #9097a2;
-  --ice: #4a63ad; --ice-2: #4a63ad; --accent-rgb: 74, 99, 173;
-  --accent-2: #7d64b0; --accent2-rgb: 125, 100, 176; --line-rgb: 40, 50, 75;
-  --agree: #1e2737; --mega-1: #10141d; --mega-2: #4a63ad; --mega-3: #7d64b0;
-  --bad: #c2453a; --warn: #a77a2c;
-  color-scheme: light;
-}
 
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
@@ -274,22 +248,6 @@ footer a { color: var(--ink); }
   .reveal { opacity: 1; transform: none; filter: none; transition: none; }
 }
 
-/* paper (light) theme: status colours dark enough to read on cream */
-:root[data-theme="paper"] .g-success, :root[data-theme="paper"] .l-passed { color: #13703b; }
-:root[data-theme="paper"] .g-failure, :root[data-theme="paper"] .l-failed { color: #b42318; }
-:root[data-theme="paper"] .grain { opacity: 0.035; }
-:root[data-theme="paper"] .glass { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), 0 30px 70px -45px rgba(20, 30, 50, 0.35); background: linear-gradient(160deg, rgba(255,255,255,0.75), rgba(255,255,255,0.45)); }
-
-/* theme picker */
-.themes { display: flex; gap: 6px; align-items: center; padding: 5px 8px; border: 1px solid var(--glass-line); border-radius: 99px; background: var(--glass); }
-.sw {
-  width: 16px; height: 16px; border-radius: 50%; border: 0; padding: 0; cursor: pointer; position: relative;
-  background: var(--c); box-shadow: 0 0 0 1px rgba(var(--line-rgb), 0.3); transition: transform 0.2s;
-}
-.sw:hover { transform: scale(1.18); }
-.sw.on { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--ink); }
-.sw:focus-visible { outline: 2px solid var(--ice); outline-offset: 3px; }
-
 /* logo */
 .pf-logo { display: block; overflow: visible; filter: drop-shadow(0 0 10px rgba(var(--accent-rgb), 0.45)); }
 .pf-orbit { transform-origin: 32px 32px; animation: pf-spin 14s linear infinite; }
@@ -315,7 +273,6 @@ footer a { color: var(--ink); }
   .pf-path, .pf-head { animation: none; stroke-dashoffset: 0; }
   .pf-spark, .pf-trail { opacity: 0.8; }
 }
-@media (max-width: 600px) { .themes { padding: 4px 6px; gap: 5px; } .sw { width: 14px; height: 14px; } }
 
 /* ---------- aether, preloader, cursor, split titles, tilt, marquee ---------- */
 .aether { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: -2; display: block; }
