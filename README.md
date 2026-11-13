@@ -14,6 +14,21 @@ preflight install-hook                 # from now on, `git push` runs `preflight
 
 Skip the hook once with `PREFLIGHT_SKIP=1 git push` or `git push --no-verify`.
 
+## Results
+
+**[Live dashboard →](https://sahitya0xsingh.github.io/preflight/)**
+
+`preflight bench` replays real pull requests: it rebuilds the merge commit GitHub tested, runs the jobs in
+Docker, and compares each job's pass/fail with GitHub's.
+
+| Project | Language | PRs | Job runs compared | Agreement | Failures caught | False alarms |
+| --- | --- | --- | --- | --- | --- | --- |
+| [checkstyle/checkstyle](https://github.com/checkstyle/checkstyle) | Java (Maven) | 25 | 78 | **98.7%** | 25/26 | 0 |
+| [pallets/flask](https://github.com/pallets/flask) | Python (uv, tox) | 20 | 117 | **100%** | 13/13 | 0 |
+
+The dashboard lists every compared job run with a link to GitHub's own job page. Rebuild its data with
+`npm --prefix dashboard run data` after a benchmark.
+
 ## Docker mode
 
 ```bash
