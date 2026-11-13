@@ -30,21 +30,14 @@ Docker, and compares each job's pass/fail with GitHub's.
 | [expressjs/express](https://github.com/expressjs/express) | JavaScript (npm) | 20 | 114 | **100%** | 33/33 | 0 |
 | [axios/axios](https://github.com/axios/axios) | JavaScript (npm, Karma, vitest) | 11 | 25 | **100%** | 9/9 | 0 |
 | [pmndrs/zustand](https://github.com/pmndrs/zustand) | TypeScript / React (pnpm) | 15 | 34 | **100%** | 2/2 | 0 |
-| [encode/httpx](https://github.com/encode/httpx) | Python (pip) | 15 | 48 | 25.0% | 8/8 | 36 |
-| **All six** | | **106** | **416** | **91.1%** | **90/91** | **36** |
+| [encode/httpx](https://github.com/encode/httpx) | Python (pip) | 15 | 48 | 77.1% | 8/8 | 11 |
+| **All six** | | **106** | **416** | **97.1%** | **90/91** | **11** |
 
-Without httpx, the other five agree on 368 of 369 job runs (99.7%). httpx's 36 false alarms are all one test,
-`test_write_timeout[trio]`, which uploads 100 MB over loopback under a 1 µs write timeout and expects the write to
-block. Whether it blocks depends on the host's Linux kernel, which a container cannot change:
-
-| Where the test ran | Kernel | Result |
-| --- | --- | --- |
-| GitHub `ubuntu-24.04` runners (the PRs replayed here, March–July 2026) | Ubuntu 24.04 kernel | passes |
-| GitHub `ubuntu-26.04` runners (httpx's own CI from October 2026) | Ubuntu 26.04 kernel | **fails** |
-| PreFlight in Docker Desktop (arm64 or x64 emulation, any CPU limit) | Linux 6.10 | **fails** |
-
-The dependencies (resolved as of each PR's date) and the CPython patch match GitHub's, so the replays are faithful
-except for the kernel; on today's GitHub runners PreFlight and GitHub agree on this test.
+httpx's 11 remaining false alarms are all one test, `test_write_timeout[trio]`, whose result depends on when
+Python's garbage collector runs. Under `coverage run` (how httpx's CI runs it) it fails on ARM64 and passes on x64,
+the architecture of GitHub's runners; under x64 emulation it is flaky. PreFlight therefore re-runs a job that fails
+on an ARM machine under x64 emulation, up to twice, and counts the failure only if it reproduces (see Docker mode).
+That took httpx from 25% to 77%; every real httpx failure is still caught.
 
 Coverage (the share of GitHub's jobs PreFlight can run on a Mac) is 85–100% for most projects and 55% for Express,
 whose test matrix runs every Node.js version on Windows too; Windows and macOS jobs stay on GitHub.
@@ -89,8 +82,11 @@ preflight install-hook --docker        # the same, before every push
   in for Chrome on ARM64), `rustup` with stable Rust, and Maven. `localhost` maps to 127.0.0.1 only, as on GitHub.
 - Tool versions are cached across runs, but each job gets its own copy of Python and Node, so packages one job
   installs never leak into the next (on GitHub every job starts from a clean tool cache).
-- Jobs that need Windows or macOS runners, secrets, or the PR itself are still left to GitHub. On an ARM Mac, a
-  tool version with no ARM64 build (Node.js 0.12, …) is reported as not checked rather than failed.
+- Jobs that need Windows or macOS runners, secrets, or the PR itself are still left to GitHub.
+- GitHub's runners are x64. On an ARM machine (Apple silicon), a job that fails is run again under x64 emulation,
+  up to twice, and counts as failed only if the failure reproduces; one that passes is reported with a note that it
+  failed on ARM64 only. Jobs that need a tool with no ARM64 build run under x64 directly. Docker Desktop's emulation
+  cannot run Ubuntu 26.04's userland, so these x64 runs use the 24.04 image. `--no-x64-confirm` turns this off.
 - Each job sees 4 CPUs, like GitHub's standard runner. A job the kernel kills for want of memory is run again on
   its own; if it still runs out, it is reported as not checked (GitHub's runner has 16 GB) and does not block the push.
   With `--keep-going`, every failure is confirmed by running it alone, since timing checks can fail from sharing.
