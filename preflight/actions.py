@@ -30,7 +30,6 @@ KNOWN: dict[str, tuple[str, str]] = {
     "actions/setup-python": ("tool", "python3"),
     "actions/setup-go": ("tool", "go"),
     "actions/setup-dotnet": ("tool", "dotnet"),
-    "ruby/setup-ruby": ("tool", "ruby"),
     "gradle/actions/setup-gradle": ("noop", "gradle wrapper used directly"),
     "gradle/gradle-build-action": ("noop", "gradle wrapper used directly"),
     "pnpm/action-setup": ("tool", "pnpm"),

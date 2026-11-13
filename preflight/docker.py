@@ -42,6 +42,8 @@ CACHE_VOLUMES = {
     "preflight-gradle": "/home/runner/.gradle",
     "preflight-npm": "/home/runner/.npm",
     "preflight-cache": "/home/runner/.cache",
+    "preflight-rustup": "/home/runner/.rustup",
+    "preflight-cargo": "/home/runner/.cargo",
 }
 
 DOCKERFILE = """\
@@ -77,12 +79,18 @@ RUN PLAYWRIGHT_BROWSERS_PATH=/opt/browsers npx -y playwright@1.48.2 install --wi
  && for n in google-chrome-stable chromium chromium-browser; do ln -s /usr/local/bin/google-chrome /usr/local/bin/$n; done \
  && ln -s $(ls -d /opt/browsers/firefox-*/firefox/firefox) /usr/local/bin/firefox \
  && chmod -R a+rX /opt/browsers && rm -rf /root/.npm
+# GitHub's image ships rustup with a stable toolchain (dtolnay/rust-toolchain and friends call rustup).
+USER runner
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable \
+ && /home/runner/.cargo/bin/rustup component add clippy rustfmt
+USER root
+ENV PATH=/home/runner/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 LABEL org.preflight.recipe="{recipe}"
 USER runner
 ENV RUNNER_TOOL_CACHE={toolcache} AGENT_TOOLSDIRECTORY={toolcache} HOME=/home/runner
 WORKDIR /home/runner
 """
-RECIPE = "6"  # bump when DOCKERFILE changes so old images are rebuilt
+RECIPE = "7"  # bump when DOCKERFILE changes so old images are rebuilt
 
 
 class DockerError(RuntimeError):
