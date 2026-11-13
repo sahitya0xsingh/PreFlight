@@ -471,10 +471,9 @@ def _github_infra(repo: str, url: str, cache: dict[str, str]) -> str:
         job = github.api(f"repos/{repo}/actions/jobs/{job_id}") or {}
     except github.GitHubError:
         job = {}
+    # An empty step list proves nothing: GitHub drops step details of older jobs (and with the logs, in
+    # repos that keep logs briefly), so only a failed step that is machine setup counts here.
     steps = job.get("steps") or []
-    if job and not steps:
-        cache[url] = "GitHub's runner never started the job (no steps ran)"
-        return cache[url]
     first = next((st["name"] for st in steps if st.get("conclusion") == "failure"), "")
     if _SETUP_STEP.match(first):
         cache[url] = f"GitHub's machine-setup step '{first}' failed, before the check ran"
@@ -523,12 +522,10 @@ def _classified(repo: str) -> tuple[list[dict], list[dict], list[dict]]:
     cache_file = bench_dir(repo) / "github-infra.json"
     cache = json.loads(cache_file.read_text()) if cache_file.exists() else {}
     infra: list[dict] = []
-    for r in rows:   # failed on GitHub: did GitHub's runner fail rather than the code?
-        if r["github"] == "failure" and r.get("url") and r["local"] in ("passed", "failed"):
+    for r in rows:   # passed here, failed on GitHub: did GitHub's runner fail rather than the code?
+        if r["local"] == "passed" and r["github"] == "failure" and r.get("url"):
             why = _github_infra(repo, r["url"], cache)
-            # A local failure next to a GitHub runner problem is only set aside when GitHub never ran
-            # the job at all; otherwise both may have failed on the code.
-            if why and (r["local"] == "passed" or why.startswith("GitHub's runner never started")):
+            if why:
                 r["github"], r["reason"] = "infra-failure", why
                 infra.append(r)
     cache_file.write_text(json.dumps(cache, indent=1))
@@ -641,6 +638,38 @@ def report(repo: str, target: float = 0.95) -> str:
     if left:
         lines += ["", "## Not run locally", "", "| Why | GitHub job runs |", "| --- | --- |"]
         lines += [f"| {k} | {v} |" for k, v in sorted(left.items(), key=lambda kv: -kv[1])]
+    return "\n".join(lines) + "\n"
+
+
+def overview() -> str:
+    """One table across every benchmarked repo (random samples; author runs listed apart)."""
+    global AUTHORS
+    root = profile.home() / "bench"
+    rows, saved = [], AUTHORS
+    try:
+        for d in sorted(root.iterdir()) if root.is_dir() else []:
+            if not ((d / "results.jsonl").exists() and (d / "cases.json").exists()):
+                continue
+            mine = d.name.endswith("__authors")
+            name = d.name[:-len("__authors")] if mine else d.name
+            owner, _, repo_name = name.partition("_")
+            AUTHORS = ["?"] if mine else []
+            rows.append((f"{owner}/{repo_name}" + (" (authors)" if mine else ""), summary(f"{owner}/{repo_name}")))
+    finally:
+        AUTHORS = saved
+    lines = ["| Repo | PRs | Compared | Agreement | Failures caught | False alarms | Coverage | Set aside |",
+             "| --- | --- | --- | --- | --- | --- | --- | --- |"]
+    tot = dict(cases=0, compared=0, agree=0, gf=0, gfa=0, fa=0)
+    for name, s in rows:
+        lines.append(f"| {name} | {s['cases']} | {s['compared']} | {_pct(s['agree'], s['compared'])} | "
+                     f"{s['github_failed_agree']}/{s['github_failed']} | {s['false_alarms']} | "
+                     f"{_pct(*s['coverage'])} | {s['infra'] + s['moved']} |")
+        if not name.endswith("(authors)"):
+            for k, v in (("cases", s["cases"]), ("compared", s["compared"]), ("agree", s["agree"]),
+                         ("gf", s["github_failed"]), ("gfa", s["github_failed_agree"]), ("fa", s["false_alarms"])):
+                tot[k] += v
+    lines.append(f"| **All random samples** | {tot['cases']} | {tot['compared']} | **{_pct(tot['agree'], tot['compared'])}** | "
+                 f"{tot['gfa']}/{tot['gf']} | {tot['fa']} | | |")
     return "\n".join(lines) + "\n"
 
 
