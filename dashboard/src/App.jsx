@@ -1,12 +1,18 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { mountCrystal } from './Crystal.js'
 import Guide from './Guide.jsx'
+import Logo from './Logo.jsx'
 
 const ACCOUNTS = ['sahitya0xsingh', 'Sahitya0805']
 const LANG = {
   'checkstyle/checkstyle': ['Java', 'Maven · JDK 17/21 · Error Prone · Pitest'],
   'pallets/flask': ['Python', 'uv · tox · CPython 3.11–3.15 · PyPy'],
   'expressjs/express': ['JavaScript', 'npm · Node.js 18–26 · mocha · eslint'],
+  'axios/axios': ['JavaScript', 'npm · Node.js · vitest · eslint · build checks'],
+  'pmndrs/zustand': ['React · TypeScript', 'pnpm · React 18/19 · vitest · tsc'],
+  'encode/httpx': ['Python', 'pip · CPython 3.9–3.13 · pytest · mypy · ruff'],
+  'google/gson': ['Java', 'Maven · JDK 11/17/21 · API compatibility'],
+  'FasterXML/jackson-core': ['Java', 'Maven · JDK 8–24 · fuzz-safe parser tests'],
 }
 const pct = (a, b) => (b ? (100 * a) / b : 0)
 const fmt = (a, b, d = 1) => (b ? `${pct(a, b).toFixed(d)}%` : '—')
@@ -100,9 +106,41 @@ function Ring({ value, size = 92 }) {
   )
 }
 
-function Hero({ t, shards }) {
+const THEMES = [
+  ['ice', 'Ice', '#7df9ff'], ['aurora', 'Aurora', '#3dffb0'], ['violet', 'Violet', '#a77bff'],
+  ['sakura', 'Sakura', '#ff7fb0'], ['paper', 'Paper (light)', '#f5f3ee'],
+]
+
+function useTheme() {
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem('pf-theme') || 'ice' } catch { return 'ice' }
+  })
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    try { localStorage.setItem('pf-theme', theme) } catch { /* private mode: fine */ }
+  }, [theme])
+  return [theme, setTheme]
+}
+
+function ThemePicker({ theme, setTheme }) {
+  return (
+    <div className="themes" role="radiogroup" aria-label="Colour theme">
+      {THEMES.map(([id, name, c]) => (
+        <button key={id} role="radio" aria-checked={theme === id} aria-label={name} title={name}
+          className={`sw ${theme === id ? 'on' : ''}`} style={{ '--c': c }} onClick={() => setTheme(id)} />
+      ))}
+    </div>
+  )
+}
+
+function Hero({ t, shards, theme }) {
   const canvas = useRef(null)
-  useEffect(() => mountCrystal(canvas.current, shards, { reduced: reducedMotion() }), [shards])
+  const crystal = useRef(null)
+  useEffect(() => {
+    crystal.current = mountCrystal(canvas.current, shards, { reduced: reducedMotion(), palette: theme })
+    return () => crystal.current.dispose()
+  }, [shards])
+  useEffect(() => { crystal.current?.setPalette(theme) }, [theme])
   return (
     <section className="hero">
       <canvas ref={canvas} className="crystal" aria-label={`3D sphere of ${shards.length} job names, one per compared job run`} />
@@ -177,7 +215,9 @@ function Projects({ repos }) {
   return (
     <section className="block" id="projects">
       <Reveal><p className="kicker">02 — BENCHMARK ACROSS LANGUAGES</p></Reveal>
-      <Reveal delay={80}><h2>Random recent PRs, three ecosystems, one verdict.</h2></Reveal>
+      <Reveal delay={80}>
+        <h2>Random recent PRs, {repos.length} projects, {new Set(repos.map((r) => (LANG[r.repo] || [''])[0].split(' · ').pop())).size} languages, one verdict.</h2>
+      </Reveal>
       <div className="cards">
         {repos.map((r, i) => {
           const [lang, stack] = LANG[r.repo] || ['', '']
@@ -303,6 +343,7 @@ function Ledger({ repos }) {
 export default function App() {
   const [data, setData] = useState(null)
   const [err, setErr] = useState('')
+  const [theme, setTheme] = useTheme()
   useEffect(() => {
     fetch('./results.json')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
@@ -324,13 +365,14 @@ export default function App() {
     <>
       <div className="grain" aria-hidden="true" />
       <nav className="nav">
-        <a className="brand" href="#top"><span className="mark" aria-hidden="true">◆</span>PREFLIGHT</a>
+        <a className="brand" href="#top"><Logo />PREFLIGHT</a>
         <div className="links">
           {mine.length > 0 && <a href="#mine">My PRs</a>}
           <a href="#projects">Benchmark</a>
           <a href="#method">Method</a>
           <a href="#ledger">Ledger</a>
           <a href="#guide">Guide</a>
+          <ThemePicker theme={theme} setTheme={setTheme} />
           <a className="gh" href="https://github.com/sahitya0xsingh/preflight" target="_blank" rel="noreferrer">GitHub ↗</a>
         </div>
       </nav>
@@ -339,7 +381,7 @@ export default function App() {
         {!data && !err && <p className="status">Loading results…</p>}
         {all.length > 0 && (
           <>
-            <Hero t={t} shards={shards} />
+            <Hero t={t} shards={shards} theme={theme} />
             <Mine repos={mine} />
             <Projects repos={sample} />
             <Method />

@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo.svg" width="96" alt="PreFlight logo: a commit dot whose check mark lifts off as an arrow"></p>
+
 # PreFlight
 
 Learn a GitHub org's CI once, run it on your machine, and push only when it passes.
@@ -16,7 +18,7 @@ Skip the hook once with `PREFLIGHT_SKIP=1 git push` or `git push --no-verify`.
 
 ## Results
 
-**[Live dashboard →](https://sahitya0xsingh.github.io/preflight/)**
+**[Live dashboard →](https://sahitya0xsingh.github.io/preflight/)** · **[Step-by-step guide →](https://sahitya0xsingh.github.io/preflight/#guide)**
 
 `preflight bench` replays real pull requests: it rebuilds the merge commit GitHub tested, runs the jobs in
 Docker, and compares each job's pass/fail with GitHub's.

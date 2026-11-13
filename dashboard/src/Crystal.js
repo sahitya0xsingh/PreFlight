@@ -3,12 +3,13 @@
 // Plain three.js: one instanced quad mesh, billboarded and animated in the vertex shader.
 import * as THREE from 'three'
 
-const COLORS = {
-  agree: '#d6ecff',
-  mine: '#7df9ff',
-  disagree: '#ff5a4e',
-  excluded: '#ffc46b',
-  dust: '#3d5f86',
+// Colours per theme (the page's palette picker); disagree/excluded keep their meaning everywhere.
+export const PALETTES = {
+  ice: { agree: '#d6ecff', mine: '#7df9ff', dust: '#3d5f86', core: '#7fd8ff', disagree: '#ff5a4e', excluded: '#ffc46b' },
+  aurora: { agree: '#d9fff0', mine: '#3dffb0', dust: '#2f7a62', core: '#5cf2bf', disagree: '#ff5a4e', excluded: '#ffc46b' },
+  violet: { agree: '#ebe2ff', mine: '#b48cff', dust: '#57468c', core: '#a98bff', disagree: '#ff5a6e', excluded: '#ffc46b' },
+  sakura: { agree: '#ffe6ef', mine: '#ff8fbd', dust: '#874a64', core: '#ff9cc4', disagree: '#ff4d3d', excluded: '#ffc46b' },
+  paper: { agree: '#1d2a3d', mine: '#1d5bd8', dust: '#a9b0bb', core: '#1d5bd8', disagree: '#d63a2f', excluded: '#b7791f', light: true },
 }
 
 const CODE = [
@@ -87,7 +88,7 @@ const FRAG = /* glsl */ `
   }
 `
 
-export function mountCrystal(canvas, shards, { reduced = false } = {}) {
+export function mountCrystal(canvas, shards, { reduced = false, palette = 'ice' } = {}) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
   const scene = new THREE.Scene()
@@ -130,16 +131,16 @@ export function mountCrystal(canvas, shards, { reduced = false } = {}) {
     const label = isRun ? runs[i].label : CODE[Math.floor(rand(i + 19) * CODE.length)]
     const cell = cellOf.get(label)
     aCell.set([(cell % cols) * cellW, Math.floor(cell / cols) * cellH], i * 2)
-    col.set(COLORS[isRun ? runs[i].o : 'dust'] || COLORS.agree)
-    aColor.set([col.r, col.g, col.b], i * 3)
   }
+  const kinds = Array.from({ length: total }, (_, i) => (i < runs.length ? runs[i].o : 'dust'))
   const attr = (a, n) => new THREE.InstancedBufferAttribute(a, n)
   geo.setAttribute('aDir', attr(aDir, 3))
   geo.setAttribute('aRadius', attr(aRadius, 1))
   geo.setAttribute('aSeed', attr(aSeed, 1))
   geo.setAttribute('aScale', attr(aScale, 1))
   geo.setAttribute('aCell', attr(aCell, 2))
-  geo.setAttribute('aColor', attr(aColor, 3))
+  const colorAttr = attr(aColor, 3)
+  geo.setAttribute('aColor', colorAttr)
 
   const uniforms = {
     uTime: { value: 0 }, uScroll: { value: 0 }, uIntro: { value: reduced ? 1 : 0 },
@@ -149,6 +150,15 @@ export function mountCrystal(canvas, shards, { reduced = false } = {}) {
     uniforms, vertexShader: VERT, fragmentShader: FRAG,
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
   })
+  // Re-colour every label for a palette; light themes draw dark ink with normal blending.
+  function setPalette(name) {
+    const pal = PALETTES[name] || PALETTES.ice
+    kinds.forEach((k, i) => { col.set(pal[k] || pal.agree); aColor.set([col.r, col.g, col.b], i * 3) })
+    colorAttr.needsUpdate = true
+    mat.blending = pal.light ? THREE.NormalBlending : THREE.AdditiveBlending
+    mat.needsUpdate = true
+    core.material.color.set(pal.core)
+  }
   const mesh = new THREE.Mesh(geo, mat)
   mesh.frustumCulled = false
   const group = new THREE.Group()
@@ -161,6 +171,7 @@ export function mountCrystal(canvas, shards, { reduced = false } = {}) {
   )
   group.add(core)
   scene.add(group)
+  setPalette(palette)
 
   let mx = 0, my = 0, scroll = 0, raf = 0, w = 0, h = 0
   const onMove = (e) => { mx = e.clientX / window.innerWidth - 0.5; my = e.clientY / window.innerHeight - 0.5 }
@@ -205,11 +216,12 @@ export function mountCrystal(canvas, shards, { reduced = false } = {}) {
   }
   frame()
 
-  return () => {
+  const dispose = () => {
     cancelAnimationFrame(raf)
     ro.disconnect()
     window.removeEventListener('pointermove', onMove)
     window.removeEventListener('scroll', onScroll)
     geo.dispose(); quad.dispose(); mat.dispose(); uniforms.uAtlas.value.dispose(); renderer.dispose()
   }
+  return { dispose, setPalette }
 }
