@@ -47,23 +47,39 @@ export function Preloader({ ready }) {
 export function Cursor() {
   const dot = useRef(null), ring = useRef(null)
   useEffect(() => {
-    if (reducedMotion() || matchMedia('(pointer: coarse)').matches) return
+    if (reducedMotion() || !matchMedia('(pointer: fine)').matches) return
     document.documentElement.classList.add('has-cursor')
-    let x = innerWidth / 2, y = innerHeight / 2, rx = x, ry = y, raf = 0
+    let x = -100, y = -100, rx = x, ry = y, raf = 0, seen = false
+    const show = (on) => { dot.current.classList.toggle('on', on); ring.current.classList.toggle('on', on) }
     const move = (e) => {
       x = e.clientX; y = e.clientY
-      const hot = e.target.closest?.('a, button, select, input, [data-tilt]')
-      ring.current.classList.toggle('hot', !!hot)
+      if (!seen) { seen = true; rx = x; ry = y }   // first move: appear where the pointer is, not mid-screen
+      show(true)
+      const t = e.target
+      ring.current.classList.toggle('hot', !!t.closest?.('a, button, select, [role=tab], [data-tilt]'))
+      ring.current.classList.toggle('text', !!t.closest?.('input, textarea'))
     }
+    const leave = () => show(false)
+    const down = () => ring.current.classList.add('down')
+    const up = () => ring.current.classList.remove('down')
     const loop = () => {
-      rx += (x - rx) * 0.14; ry += (y - ry) * 0.14
-      dot.current.style.transform = `translate(${x}px, ${y}px)`
-      ring.current.style.transform = `translate(${rx}px, ${ry}px)`
+      rx += (x - rx) * 0.2; ry += (y - ry) * 0.2
+      dot.current.style.transform = `translate3d(${x}px, ${y}px, 0)`
+      ring.current.style.transform = `translate3d(${rx}px, ${ry}px, 0)`
       raf = requestAnimationFrame(loop)
     }
     addEventListener('pointermove', move, { passive: true })
+    addEventListener('pointerdown', down, { passive: true })
+    addEventListener('pointerup', up, { passive: true })
+    document.documentElement.addEventListener('mouseleave', leave)
+    addEventListener('blur', leave)
     loop()
-    return () => { cancelAnimationFrame(raf); removeEventListener('pointermove', move); document.documentElement.classList.remove('has-cursor') }
+    return () => {
+      cancelAnimationFrame(raf)
+      removeEventListener('pointermove', move); removeEventListener('pointerdown', down); removeEventListener('pointerup', up)
+      document.documentElement.removeEventListener('mouseleave', leave); removeEventListener('blur', leave)
+      document.documentElement.classList.remove('has-cursor')
+    }
   }, [])
   return (
     <>
