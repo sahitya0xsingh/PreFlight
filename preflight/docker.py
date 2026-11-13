@@ -194,6 +194,31 @@ def as_of_env() -> dict[str, str]:
     return {"PIP_UPLOADED_PRIOR_TO": AS_OF, "UV_EXCLUDE_NEWER": AS_OF, "NPM_CONFIG_BEFORE": AS_OF}
 
 
+@functools.lru_cache(maxsize=1)
+def _github_python_builds() -> list[tuple[tuple[int, ...], str]]:
+    """(version, published_at) of every CPython build setup-python could install (actions/python-versions)."""
+    from . import github
+    out = []
+    for r in github.paginate("repos/actions/python-versions/releases"):
+        m = re.match(r"(\d+)\.(\d+)\.(\d+)-", r.get("tag_name", ""))
+        if m and not r.get("prerelease"):
+            out.append((tuple(int(x) for x in m.groups()), r.get("published_at") or ""))
+    return out
+
+
+def python_as_of(req: str) -> str:
+    """For a replay, "3.12" means the newest 3.12.x setup-python offered on the PR's date."""
+    if not AS_OF or not re.fullmatch(r"\d+\.\d+", req):
+        return req
+    try:
+        builds = _github_python_builds()
+    except Exception:
+        return req
+    want = tuple(int(x) for x in req.split("."))
+    ok = [v for v, when in builds if v[:2] == want and when and when <= AS_OF]
+    return ".".join(map(str, max(ok))) if ok else req
+
+
 def resolve_node(spec: str) -> str:
     return _resolve_node(spec, AS_OF[:10] if AS_OF else None)
 
@@ -287,7 +312,7 @@ echo PATH+={job}/bin
         spec = str(with_.get("python-version") or _version_file(root, with_.get("python-version-file")) or "")
         if not spec:
             return None
-        req = re.sub(r"\.x$", "", spec.strip())
+        req = python_as_of(re.sub(r"\.x$", "", spec.strip()))
         if req.startswith("pypy"):
             req = "pypy@" + req[4:].lstrip("-")
         # Install once into the shared cache (pip bootstrapped, never used there), then give the job its
