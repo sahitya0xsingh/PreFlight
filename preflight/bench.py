@@ -434,11 +434,33 @@ def _github_infra(repo: str, url: str, cache: dict[str, str]) -> str:
     return hit
 
 
+_MOVING_REF = re.compile(r"archive/refs/heads/|git\+https?://\S+@(main|master|develop)\b|\bgit\+https?://[^\s@]+\.git(\s|$)")
+_RESOLVE_FAIL = re.compile(r"No solution found|unsatisfiable|ResolutionImpossible|could not be resolved|ERESOLVE")
+
+
+def _moving_dependency(path: str) -> bool:
+    """The job installs another project's branch tip, and resolving it failed here.
+
+    A replay runs today, so it gets today's tip of that branch, not the one GitHub got when
+    the PR ran; checking a new push does not have this problem.
+    """
+    try:
+        text = Path(path).read_text(errors="replace")
+    except OSError:
+        return False
+    return bool(_MOVING_REF.search(text) and _RESOLVE_FAIL.search(text))
+
+
 def report(repo: str, target: float = 0.95) -> str:
     rows = [json.loads(line) for line in (bench_dir(repo) / "results.jsonl").read_text().splitlines() if line.strip()]
     for r in rows:   # rows written before needs-memory existed
         if r["local"] == "failed" and r.get("log") and _oom_log(r["log"]):
             r["local"] = "needs-memory"
+    moved: list[dict] = []
+    for r in rows:   # failed here because another project's branch has moved on since GitHub ran
+        if r["local"] == "failed" and r["github"] == "success" and r.get("log") and _moving_dependency(r["log"]):
+            r["local"] = "moved-dependency"
+            moved.append(r)
     cache_file = bench_dir(repo) / "github-infra.json"
     cache = json.loads(cache_file.read_text()) if cache_file.exists() else {}
     infra: list[dict] = []
@@ -476,6 +498,7 @@ def report(repo: str, target: float = 0.95) -> str:
         f"| Coverage: GitHub jobs PreFlight can run | {_pct(len(covered), len(conclusive))} |",
         f"| Trigger accuracy: GitHub jobs PreFlight knew would run | {_pct(len(trig_ok), len(trig))} |",
         f"| GitHub failures caused by GitHub's runner (download/network), not compared | {len(infra)} |",
+        f"| Replays that install another project's moving branch, not compared | {len(moved)} |",
         f"| PreFlight jobs with no GitHub job of the same name | {sum(r['local'] == 'unmatched' and r['github'] == 'missing' for r in rows)} |",
         "",
         "Failing PRs are sampled on purpose (every job GitHub failed is run), so the failed-job row has",
@@ -492,6 +515,11 @@ def report(repo: str, target: float = 0.95) -> str:
                   "", "| Commit | Job | GitHub's error |", "| --- | --- | --- |"]
         lines += [f"| {r['sha'][:10]} | [{r['workflow']} / {r['job']}]({r['url']}) | {r['reason'].replace('|', '/')} |"
                   for r in infra]
+    if moved:
+        lines += ["", "## Moving dependencies (the job installs another project's branch tip, which has changed since GitHub ran)",
+                  "", "| Commit | Job | Local failure |", "| --- | --- | --- |"]
+        lines += [f"| {r['sha'][:10]} | [{r['workflow']} / {r['job']}]({r['url']}) | {r['reason'].replace('|', '/')[:120]} |"
+                  for r in moved]
     left: dict[str, int] = {}
     for r in conclusive:
         if r["local"] in ("left-to-github", "not-triggered", "unmatched", "needs-token", "needs-memory"):

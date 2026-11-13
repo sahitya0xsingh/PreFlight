@@ -62,12 +62,17 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # GitHub's runner image ships Maven; many Java workflows call a bare `mvn`.
 RUN curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz \
       | tar -xz -C /opt && ln -s /opt/apache-maven-3.9.9/bin/mvn /usr/local/bin/mvn
+# GitHub's runner image ships Node.js on PATH (pyright, markdownlint, ... call a bare `node`).
+RUN a=$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/') \
+ && v=$(curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | grep -o "node-v22[0-9.]*-linux-$a.tar.xz" | head -1) \
+ && curl -fsSL "https://nodejs.org/dist/latest-v22.x/$v" | tar -xJ -C /usr/local --strip-components=1 \
+ && node --version
 LABEL org.preflight.recipe="{recipe}"
 USER runner
 ENV RUNNER_TOOL_CACHE={toolcache} AGENT_TOOLSDIRECTORY={toolcache} HOME=/home/runner
 WORKDIR /home/runner
 """
-RECIPE = "4"  # bump when DOCKERFILE changes so old images are rebuilt
+RECIPE = "5"  # bump when DOCKERFILE changes so old images are rebuilt
 
 
 class DockerError(RuntimeError):
@@ -249,8 +254,8 @@ uv python install -q '{req}' >&2
 p=$(uv python find '{req}')
 d=$(dirname "$p")
 [ -e "$d/python" ] || ln -s "$p" "$d/python"
-rm -f "$d"/../lib/python*/EXTERNALLY-MANAGED
-"$p" -m pip --version >/dev/null 2>&1 || "$p" -m ensurepip -q >&2
+rm -f "$d"/../lib/*/EXTERNALLY-MANAGED
+"$p" -m pip --version >/dev/null 2>&1 || "$p" -m ensurepip >&2
 echo pythonLocation=$(dirname "$d")
 echo PATH+=$d
 """
