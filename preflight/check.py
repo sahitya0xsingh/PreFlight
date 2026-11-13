@@ -271,6 +271,9 @@ class _Active:
             box.stop()
 
 
+X64_ATTEMPTS = 2   # x64 runs used to confirm an ARM64 failure
+
+
 def _run_one(p: PlannedJob, combo: dict[str, Any], ctx_values: dict[str, Any], root: Path, log: Path,
              plan: Plan, verbose: bool, snapshot: str, cancel: threading.Event, active: _Active,
              say, echo_prefix: str) -> JobResult:
@@ -282,18 +285,27 @@ def _run_one(p: PlannedJob, combo: dict[str, Any], ctx_values: dict[str, Any], r
     why = "needs a tool with no ARM64 build" if res.status == "not-checked" else "failed on ARM64"
     say(f"{echo_prefix}  ↻ {p.wf.name} / {res.label} {why}; running it under x64 emulation"
         + ("" if res.status == "not-checked" else " to confirm"))
+    # A failure counts only if it reproduces: up to X64_ATTEMPTS runs under x64; a pass in any of them
+    # means it was not a real failure on GitHub's architecture (flaky timing included).
+    attempts = 1 if res.status == "not-checked" else X64_ATTEMPTS
     token = dockermod.PLATFORM.set("linux/amd64")
     try:
-        x64 = _run_native(p, combo, ctx_values, root, log.with_name(log.stem + "-x64.log"), plan, verbose,
-                          snapshot, cancel, active, say, echo_prefix)
+        for n in range(1, attempts + 1):
+            x64 = _run_native(p, combo, ctx_values, root, log.with_name(f"{log.stem}-x64-{n}.log"), plan, verbose,
+                              snapshot, cancel, active, say, echo_prefix)
+            if x64.status == "passed" or res.status == "not-checked" or cancel.is_set():
+                break
+            if n < attempts:
+                say(f"{echo_prefix}  ↻ failed under x64 too; one more x64 run to tell a real failure from a flaky one")
     finally:
         dockermod.PLATFORM.reset(token)
     if res.status == "not-checked":
         x64.note = "run under x64 emulation (no ARM64 build of a tool it needs)"
         return x64
     if x64.status == "passed":
+        where = "" if n == 1 else f" on x64 attempt {n} of {attempts} (flaky)"
         x64.note = (f"failed on ARM64 ('{res.failed_step.name if res.failed_step else '?'}'), passed under x64 "
-                    "emulation like GitHub's runners")
+                    f"emulation like GitHub's runners{where}")
         return x64
     return res
 
