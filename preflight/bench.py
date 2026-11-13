@@ -48,6 +48,7 @@ class Case:
     workflows: list[str] = field(default_factory=list)   # workflow files GitHub ran
     jobs: list[GhJob] = field(default_factory=list)
     base: str = ""       # the PR's base branch ("" = the repo's default branch)
+    author: str = ""     # who pushed the commit (the PR author)
 
 
 def _pr_base(repo: str, sha: str, runs: list[dict[str, Any]]) -> str:
@@ -74,21 +75,29 @@ def _pr_base(repo: str, sha: str, runs: list[dict[str, Any]]) -> str:
     return next(((pr.get("base") or {}).get("ref", "") for pr in prs), "")
 
 
-def bench_dir(repo: str) -> Path:
-    return profile.home() / "bench" / repo.replace("/", "_")
+AUTHORS: list[str] = []   # set by `--authors`: only these people's PRs, kept apart from the random sample
+
+
+def bench_dir(repo: str, tagged: bool = True) -> Path:
+    name = repo.replace("/", "_")
+    if AUTHORS and tagged:
+        name += "__authors"
+    return profile.home() / "bench" / name
 
 
 # ---------------------------------------------------------------- sampling
 
 def _runs(repo: str, pages: int) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    for event in PR_EVENTS:
-        for page in range(1, pages + 1):
-            data = github.api(f"repos/{repo}/actions/runs?event={event}&status=completed&per_page=100&page={page}")
-            batch = data.get("workflow_runs", [])
-            out += batch
-            if len(batch) < 100:
-                break
+    for actor in AUTHORS or [""]:
+        for event in PR_EVENTS:
+            for page in range(1, pages + 1):
+                data = github.api(f"repos/{repo}/actions/runs?event={event}&status=completed&per_page=100&page={page}"
+                                  + (f"&actor={actor}" if actor else ""))
+                batch = data.get("workflow_runs", [])
+                out += batch
+                if len(batch) < 100:
+                    break
     return out
 
 
@@ -115,15 +124,18 @@ def sample_cases(repo: str, count: int, failing_share: float, pages: int = 5, sk
             wf = Path(r["path"]).name
             if wf not in latest or r["run_attempt"] > latest[wf]["run_attempt"] or r["id"] > latest[wf]["id"]:
                 latest[wf] = r
-        if len(latest) < 2:   # one workflow only: a docs-only or partial run, not a full CI picture
+        if len(latest) < (1 if AUTHORS else 2):   # one workflow only: a docs-only or partial run
             continue
         candidates.append(Case(sha=sha, title=runs[0].get("display_title", ""), created_at=first,
                                failed=any(r["conclusion"] == "failure" for r in latest.values()),
-                               workflows=sorted(latest)))
+                               workflows=sorted(latest), author=(runs[0].get("actor") or {}).get("login", "")))
         candidates[-1]._runs = list(latest.values())  # type: ignore[attr-defined]
     candidates.sort(key=lambda c: c.created_at, reverse=True)
     want_fail = round(count * failing_share)
     want = {True: want_fail, False: count - want_fail}
+    if AUTHORS:   # someone's own PRs: take them as they come, failed or not
+        want = {True: count, False: count}
+    total = count
     picked: list[Case] = []
     for c in candidates:   # newest first; fetch jobs only for cases that may be picked
         if want[c.failed] <= 0:
@@ -136,7 +148,7 @@ def sample_cases(repo: str, count: int, failing_share: float, pages: int = 5, sk
             if jobs:   # a run with no jobs never started (workflow refused or invalid): nothing to compare
                 runs.append(r)
                 c.jobs += jobs
-        if len(runs) < 2:
+        if len(runs) < (1 if AUTHORS else 2):
             continue
         c.workflows = sorted(Path(r["path"]).name for r in runs)
         failed = any(r["conclusion"] == "failure" for r in runs)
@@ -147,7 +159,7 @@ def sample_cases(repo: str, count: int, failing_share: float, pages: int = 5, sk
         c.base = _pr_base(repo, c.sha, runs)
         want[failed] -= 1
         picked.append(c)
-        if not any(v > 0 for v in want.values()):
+        if not any(v > 0 for v in want.values()) or len(picked) >= total:
             break
     picked.sort(key=lambda c: c.created_at, reverse=True)
     return picked
@@ -177,7 +189,7 @@ def _git(root: Path, *args: str, check_: bool = True) -> str:
 
 
 def ensure_clone(repo: str) -> Path:
-    root = bench_dir(repo) / "repo"
+    root = bench_dir(repo, tagged=False) / "repo"   # one clone per repo, shared by both kinds of bench
     if not (root / ".git").exists():
         root.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "clone", "--quiet", "--filter=blob:none", "--no-checkout",
@@ -542,6 +554,7 @@ def summary(repo: str) -> dict[str, Any]:
         if r["local"] in _NOT_RUN:
             not_run[_not_run_key(r)] = not_run.get(_not_run_key(r), 0) + 1
     keep = ("sha", "title", "workflow", "job", "github", "local", "reason", "seconds", "gh_seconds", "url")
+    authors = {c.sha: c.author for c in _load_cases(bench_dir(repo))}
     return {
         "repo": repo,
         "cases": len({r["sha"] for r in rows}),
@@ -558,7 +571,8 @@ def summary(repo: str) -> dict[str, Any]:
         "infra": len(infra),
         "moved": len(moved),
         "not_run": dict(sorted(not_run.items(), key=lambda kv: -kv[1])),
-        "runs": [{k: r.get(k) for k in keep} for r in ran + infra + moved],
+        "authors": sorted({a for a in authors.values() if a}),
+        "runs": [{**{k: r.get(k) for k in keep}, "author": authors.get(r["sha"], "")} for r in ran + infra + moved],
     }
 
 
@@ -625,15 +639,24 @@ def report(repo: str, target: float = 0.95) -> str:
 
 def export(path: Path) -> list[str]:
     """Write every benchmarked repo's summary to one JSON file; return the repos."""
+    global AUTHORS
     root = profile.home() / "bench"
-    repos = []
+    found: list[tuple[str, bool]] = []
     for d in sorted(root.iterdir()) if root.is_dir() else []:
         if (d / "results.jsonl").exists() and (d / "cases.json").exists():
-            owner, _, name = d.name.partition("_")
-            repos.append(f"{owner}/{name}")
-    data = {"generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "repos": [summary(r) for r in repos]}
+            name, mine = (d.name[:-len("__authors")], True) if d.name.endswith("__authors") else (d.name, False)
+            owner, _, repo_name = name.partition("_")
+            found.append((f"{owner}/{repo_name}", mine))
+    saved, out = AUTHORS, []
+    try:
+        for repo, mine in found:
+            AUTHORS = ["?"] if mine else []
+            out.append({**summary(repo), "set": "authors" if mine else "sample"})
+    finally:
+        AUTHORS = saved
+    data = {"generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "repos": out}
     path.write_text(json.dumps(data, indent=1))
-    return repos
+    return [f"{r} ({'authors' if m else 'sample'})" for r, m in found]
 
 
 # ---------------------------------------------------------------- fast follow-ups

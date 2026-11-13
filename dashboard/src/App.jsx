@@ -1,13 +1,14 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { mountCrystal } from './Crystal.js'
 
+const ACCOUNTS = ['sahitya0xsingh', 'Sahitya0805']
 const LANG = {
-  'checkstyle/checkstyle': { lang: 'Java', stack: 'Maven · JDK 17/21 · Error Prone · Pitest' },
-  'pallets/flask': { lang: 'Python', stack: 'uv · tox · CPython 3.11–3.15 · PyPy · mypy/pyright' },
-  'expressjs/express': { lang: 'JavaScript', stack: 'npm · Node.js 18–26 · mocha · eslint' },
+  'checkstyle/checkstyle': ['Java', 'Maven · JDK 17/21 · Error Prone · Pitest'],
+  'pallets/flask': ['Python', 'uv · tox · CPython 3.11–3.15 · PyPy'],
+  'expressjs/express': ['JavaScript', 'npm · Node.js 18–26 · mocha · eslint'],
 }
-
 const pct = (a, b) => (b ? (100 * a) / b : 0)
-const fmt = (a, b) => (b ? `${pct(a, b).toFixed(1)}%` : 'n/a')
+const fmt = (a, b, d = 1) => (b ? `${pct(a, b).toFixed(d)}%` : '—')
 
 function outcome(r) {
   if (r.github === 'infra-failure' || r.local === 'moved-dependency') return 'excluded'
@@ -15,134 +16,272 @@ function outcome(r) {
   return agree ? 'agree' : 'disagree'
 }
 
-function Meter({ value, label }) {
+function totals(repos) {
+  return repos.reduce(
+    (s, r) => ({
+      compared: s.compared + r.compared, agree: s.agree + r.agree,
+      failed: s.failed + r.github_failed, caught: s.caught + r.github_failed_agree,
+      falseAlarms: s.falseAlarms + r.false_alarms, cases: s.cases + r.cases,
+    }),
+    { compared: 0, agree: 0, failed: 0, caught: 0, falseAlarms: 0, cases: 0 },
+  )
+}
+
+const reducedMotion = () => typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+// Counts up once the element scrolls into view.
+function Count({ to, decimals = 0, suffix = '' }) {
+  const ref = useRef(null)
+  const [v, setV] = useState(reducedMotion() ? to : 0)
+  useEffect(() => {
+    if (reducedMotion()) { setV(to); return }
+    const el = ref.current
+    let raf = 0
+    const io = new IntersectionObserver(([e]) => {
+      if (!e.isIntersecting) return
+      io.disconnect()
+      const t0 = performance.now()
+      const step = (now) => {
+        const k = Math.min(1, (now - t0) / 1400)
+        setV(to * (1 - Math.pow(1 - k, 4)))
+        if (k < 1) raf = requestAnimationFrame(step)
+      }
+      raf = requestAnimationFrame(step)
+    }, { threshold: 0.4 })
+    io.observe(el)
+    return () => { io.disconnect(); cancelAnimationFrame(raf) }
+  }, [to])
+  return <span ref={ref}>{v.toFixed(decimals)}{suffix}</span>
+}
+
+// Fades children in as they enter the viewport.
+function Reveal({ children, delay = 0, className = '' }) {
+  const ref = useRef(null)
+  const [shown, setShown] = useState(false)
+  useEffect(() => {
+    const io = new IntersectionObserver(([e]) => { if (e.isIntersecting) { setShown(true); io.disconnect() } }, { threshold: 0.12 })
+    io.observe(ref.current)
+    return () => io.disconnect()
+  }, [])
   return (
-    <div className="meter" role="img" aria-label={`${label}: ${value.toFixed(1)}%`}>
-      <div className="meter-fill" style={{ width: `${Math.min(100, value)}%` }} />
-      <div className="meter-target" style={{ left: '95%' }} title="95% target" />
+    <div ref={ref} className={`reveal ${shown ? 'in' : ''} ${className}`} style={{ transitionDelay: `${delay}ms` }}>
+      {children}
     </div>
   )
 }
 
-function Totals({ repos }) {
-  const t = repos.reduce(
-    (s, r) => ({
-      compared: s.compared + r.compared,
-      agree: s.agree + r.agree,
-      failed: s.failed + r.github_failed,
-      caught: s.caught + r.github_failed_agree,
-      falseAlarms: s.falseAlarms + r.false_alarms,
-      cases: s.cases + r.cases,
-    }),
-    { compared: 0, agree: 0, failed: 0, caught: 0, falseAlarms: 0, cases: 0 },
-  )
-  const tiles = [
-    { k: 'Agreement with GitHub', v: fmt(t.agree, t.compared), sub: `${t.agree} of ${t.compared} job runs` },
-    { k: 'Real failures caught', v: fmt(t.caught, t.failed), sub: `${t.caught} of ${t.failed} GitHub failures` },
-    { k: 'False alarms', v: String(t.falseAlarms), sub: 'failed here, passed on GitHub' },
-    { k: 'Pull requests replayed', v: String(t.cases), sub: `${repos.length} projects, ${new Set(repos.map((r) => LANG[r.repo]?.lang)).size} languages` },
-  ]
+function Scramble({ text }) {
+  // Letters settle from noise into the word, once.
+  const [out, setOut] = useState(reducedMotion() ? text : text.replace(/\S/g, '·'))
+  useEffect(() => {
+    if (reducedMotion()) return
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%/'
+    let frame = 0, raf = 0
+    const tick = () => {
+      frame++
+      setOut(text.split('').map((c, i) => (c === ' ' || i < frame / 2 ? c : chars[(i * 7 + frame) % chars.length])).join(''))
+      if (frame / 2 < text.length) raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [text])
+  return <span aria-label={text}>{out}</span>
+}
+
+function Ring({ value, size = 92 }) {
+  const r = size / 2 - 6, c = 2 * Math.PI * r
   return (
-    <section className="tiles" aria-label="Totals">
-      {tiles.map((x) => (
-        <div className="tile" key={x.k}>
-          <div className="tile-k">{x.k}</div>
-          <div className="tile-v">{x.v}</div>
-          <div className="tile-sub">{x.sub}</div>
+    <svg className="ring" width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
+      <circle cx={size / 2} cy={size / 2} r={r} className="ring-bg" />
+      <circle cx={size / 2} cy={size / 2} r={r} className="ring-fg"
+        strokeDasharray={c} strokeDashoffset={c * (1 - value / 100)} transform={`rotate(-90 ${size / 2} ${size / 2})`} />
+    </svg>
+  )
+}
+
+function Hero({ t, shards }) {
+  const canvas = useRef(null)
+  useEffect(() => mountCrystal(canvas.current, shards, { reduced: reducedMotion() }), [shards])
+  return (
+    <section className="hero">
+      <canvas ref={canvas} className="crystal" aria-label={`3D crystal of ${shards.length} shards, one per compared job run`} />
+      <div className="hero-copy">
+        <p className="eyebrow"><Scramble text="PREFLIGHT / LOCAL CI THAT AGREES WITH GITHUB" /></p>
+        <h1 className="mega"><Count to={pct(t.agree, t.compared)} decimals={1} /><span>%</span></h1>
+        <p className="lede">
+          Run a project's GitHub Actions CI on your laptop, in Docker, before you push. Replayed on real pull
+          requests, PreFlight's verdict matched GitHub's on <b>{t.agree} of {t.compared}</b> job runs.
+        </p>
+        <div className="meta">
+          <span>{t.cases} PULL REQUESTS</span><span>{t.caught}/{t.failed} FAILURES CAUGHT</span><span>{t.falseAlarms} FALSE ALARMS</span>
         </div>
-      ))}
+        <div className="cta">
+          <a className="btn primary" href="https://github.com/sahitya0xsingh/preflight" target="_blank" rel="noreferrer">View on GitHub ↗</a>
+          <a className="btn" href="#method">How it's measured</a>
+        </div>
+      </div>
+      <div className="legend" aria-hidden="true">
+        <span><i className="d agree" />agrees with GitHub</span>
+        <span><i className="d disagree" />disagrees</span>
+        <span><i className="d excluded" />GitHub's runner failed</span>
+      </div>
+      <div className="scroll-cue" aria-hidden="true">SCROLL</div>
     </section>
   )
 }
 
-function RepoCard({ r }) {
-  const info = LANG[r.repo] || { lang: '', stack: '' }
-  const acc = pct(r.agree, r.compared)
-  const notRun = Object.entries(r.not_run)
+function Mine({ repos }) {
+  if (!repos.length) return null
+  const t = totals(repos)
+  const authors = [...new Set(repos.flatMap((r) => r.authors))]
   return (
-    <article className="card">
-      <header className="card-head">
-        <div>
-          <a className="repo" href={`https://github.com/${r.repo}`} target="_blank" rel="noreferrer">{r.repo}</a>
-          <div className="stack">{info.stack}</div>
+    <section className="block mine" id="mine">
+      <Reveal><p className="kicker">01 — MY OWN PULL REQUESTS</p></Reveal>
+      <Reveal delay={80}>
+        <h2>Tested on the PRs I sent to open source.</h2>
+      </Reveal>
+      <Reveal delay={140}>
+        <div className="accounts">
+          {(authors.length ? authors : ACCOUNTS).map((a) => (
+            <a key={a} className="acct" href={`https://github.com/${a}`} target="_blank" rel="noreferrer">
+              <img src={`https://github.com/${a}.png?size=64`} alt="" width="28" height="28" loading="lazy" />@{a}
+            </a>
+          ))}
         </div>
-        {info.lang && <span className={`lang lang-${info.lang.toLowerCase()}`}>{info.lang}</span>}
-      </header>
-      <div className="big">
-        {acc.toFixed(1)}<span>%</span>
+      </Reveal>
+      <div className="mine-grid">
+        <Reveal className="glass stat-xl">
+          <div className="k">Agreement on my PRs</div>
+          <div className="v"><Count to={pct(t.agree, t.compared)} decimals={1} suffix="%" /></div>
+          <div className="s">{t.agree}/{t.compared} job runs · {t.cases} PRs · {repos.length} repos</div>
+        </Reveal>
+        {repos.map((r, i) => (
+          <Reveal key={r.repo} delay={60 * i} className="glass mini">
+            <a className="repo" href={`https://github.com/${r.repo}/pulls?q=author%3A${authors[0] || ACCOUNTS[0]}`} target="_blank" rel="noreferrer">{r.repo}</a>
+            <div className="mini-row">
+              <Ring value={pct(r.agree, r.compared)} size={64} />
+              <div>
+                <div className="mini-v">{fmt(r.agree, r.compared)}</div>
+                <div className="s">{r.agree}/{r.compared} runs · {r.cases} PRs</div>
+              </div>
+            </div>
+          </Reveal>
+        ))}
       </div>
-      <div className="big-sub">agreement · {r.agree}/{r.compared} job runs · {r.cases} PRs</div>
-      <Meter value={acc} label="Agreement" />
-      <dl className="facts">
-        <dt>Jobs GitHub passed</dt><dd>{fmt(r.github_passed_agree, r.github_passed)}</dd>
-        <dt>Failures caught</dt><dd>{fmt(r.github_failed_agree, r.github_failed)}</dd>
-        <dt>Missed failures</dt><dd>{r.missed_failures}</dd>
-        <dt>False alarms</dt><dd>{r.false_alarms}</dd>
-        <dt>Coverage</dt><dd>{fmt(...r.coverage)}</dd>
-        <dt>Trigger accuracy</dt><dd>{fmt(...r.triggers)}</dd>
-      </dl>
-      {(r.infra > 0 || r.moved > 0) && (
-        <p className="note">
-          Not compared: {r.infra > 0 && `${r.infra} GitHub runner failure${r.infra > 1 ? 's' : ''}`}
-          {r.infra > 0 && r.moved > 0 && ', '}
-          {r.moved > 0 && `${r.moved} replay${r.moved > 1 ? 's' : ''} of a moving dependency`}
-        </p>
-      )}
-      {notRun.length > 0 && (
-        <details>
-          <summary>Left to GitHub ({notRun.reduce((s, [, n]) => s + n, 0)} job runs)</summary>
-          <ul className="notrun">
-            {notRun.map(([k, n]) => (
-              <li key={k}><span>{k.replace('left-to-github: ', '')}</span><b>{n}</b></li>
-            ))}
-          </ul>
-        </details>
-      )}
-    </article>
+    </section>
   )
 }
 
-function Runs({ repos }) {
+function Projects({ repos }) {
+  return (
+    <section className="block" id="projects">
+      <Reveal><p className="kicker">02 — BENCHMARK ACROSS LANGUAGES</p></Reveal>
+      <Reveal delay={80}><h2>Random recent PRs, three ecosystems, one verdict.</h2></Reveal>
+      <div className="cards">
+        {repos.map((r, i) => {
+          const [lang, stack] = LANG[r.repo] || ['', '']
+          const acc = pct(r.agree, r.compared)
+          return (
+            <Reveal key={r.repo} delay={90 * i} className="glass card">
+              <div className="card-top">
+                <span className="tag">{lang}</span>
+                <a className="repo" href={`https://github.com/${r.repo}`} target="_blank" rel="noreferrer">{r.repo} ↗</a>
+              </div>
+              <div className="card-mid">
+                <Ring value={acc} />
+                <div>
+                  <div className="card-v"><Count to={acc} decimals={1} suffix="%" /></div>
+                  <div className="s">{r.agree}/{r.compared} job runs · {r.cases} PRs</div>
+                </div>
+              </div>
+              <div className="stack">{stack}</div>
+              <dl className="facts">
+                <dt>Failures caught</dt><dd>{fmt(r.github_failed_agree, r.github_failed)}</dd>
+                <dt>False alarms</dt><dd>{r.false_alarms}</dd>
+                <dt>Missed failures</dt><dd>{r.missed_failures}</dd>
+                <dt>Runnable on a Mac</dt><dd>{fmt(...r.coverage)}</dd>
+                <dt>Trigger accuracy</dt><dd>{fmt(...r.triggers)}</dd>
+              </dl>
+            </Reveal>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+const STEPS = [
+  ['Pick real PRs', 'Recent pull-request commits whose CI finished on GitHub, half with a failed run, so catching failures is measured too.'],
+  ['Rebuild the merge', "The PR head merged into its own base branch as it stood when CI started: the commit GitHub actually tested."],
+  ['Run it in Docker', "A fresh Ubuntu container per job, with the workflow's matrix, setup actions, services, artifacts and marketplace actions."],
+  ['Compare job by job', "Each job's pass/fail against GitHub's result for the job of the same name. Every row links to GitHub's own log."],
+]
+
+function Method() {
+  return (
+    <section className="block" id="method">
+      <Reveal><p className="kicker">03 — METHOD</p></Reveal>
+      <Reveal delay={80}><h2>No synthetic tests. Real PRs, replayed.</h2></Reveal>
+      <ol className="steps">
+        {STEPS.map(([h, p], i) => (
+          <Reveal key={h} delay={90 * i} className="step">
+            <span className="num">0{i + 1}</span>
+            <h3>{h}</h3>
+            <p>{p}</p>
+          </Reveal>
+        ))}
+      </ol>
+      <Reveal>
+        <p className="fine">
+          Kept out of the figure, and listed: failures of GitHub's own runner (a download that returned HTTP 5xx) and
+          replays that install another project's moving branch. Jobs that need Windows, macOS, secrets or the opened PR
+          stay on GitHub and count against coverage, not accuracy.
+        </p>
+      </Reveal>
+    </section>
+  )
+}
+
+function Ledger({ repos }) {
   const [repo, setRepo] = useState('all')
   const [which, setWhich] = useState('all')
   const [q, setQ] = useState('')
   const all = useMemo(
-    () => repos.flatMap((r) => r.runs.map((x) => ({ ...x, repo: r.repo, outcome: outcome(x) }))),
+    () => repos.flatMap((r) => r.runs.map((x) => ({ ...x, repo: r.repo, set: r.set, outcome: outcome(x) }))),
     [repos],
   )
-  const shown = all.filter(
-    (x) =>
-      (repo === 'all' || x.repo === repo) &&
-      (which === 'all' || x.outcome === which || (which === 'failed' && x.github === 'failure')) &&
-      (!q || `${x.workflow} ${x.job} ${x.title}`.toLowerCase().includes(q.toLowerCase())),
-  )
+  const names = [...new Set(repos.map((r) => r.repo))]
+  const shown = all.filter((x) =>
+    (repo === 'all' || x.repo === repo) &&
+    (which === 'all' || (which === 'mine' ? x.set === 'authors' : which === 'failed' ? x.github === 'failure' : x.outcome === which)) &&
+    (!q || `${x.workflow} ${x.job} ${x.title} ${x.sha}`.toLowerCase().includes(q.toLowerCase())))
   return (
-    <section className="runs">
-      <h2>Every compared job run</h2>
+    <section className="block" id="ledger">
+      <Reveal><p className="kicker">04 — THE LEDGER</p></Reveal>
+      <Reveal delay={80}><h2>Every compared job run.</h2></Reveal>
       <div className="filters">
         <select value={repo} onChange={(e) => setRepo(e.target.value)} aria-label="Project">
           <option value="all">All projects</option>
-          {repos.map((r) => <option key={r.repo} value={r.repo}>{r.repo}</option>)}
+          {names.map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
         <select value={which} onChange={(e) => setWhich(e.target.value)} aria-label="Outcome">
-          <option value="all">All outcomes</option>
+          <option value="all">All runs</option>
+          <option value="mine">My PRs</option>
           <option value="agree">Agree</option>
           <option value="disagree">Disagree</option>
           <option value="failed">GitHub failed</option>
           <option value="excluded">Not compared</option>
         </select>
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search job or PR" aria-label="Search" />
-        <span className="count">{shown.length} runs</span>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search job, PR or commit" aria-label="Search" />
+        <span className="count">{shown.length} RUNS</span>
       </div>
-      <div className="table-wrap">
+      <div className="glass table-wrap">
         <table>
-          <thead>
-            <tr><th>Project</th><th>PR commit</th><th>Job</th><th>GitHub</th><th>PreFlight</th><th>Local time</th></tr>
-          </thead>
+          <thead><tr><th>Project</th><th>PR commit</th><th>Job</th><th>GitHub</th><th>PreFlight</th><th className="num">Local</th></tr></thead>
           <tbody>
-            {shown.slice(0, 400).map((x, i) => (
+            {shown.slice(0, 500).map((x, i) => (
               <tr key={i} className={`o-${x.outcome}`}>
-                <td className="mono">{x.repo.split('/')[1]}</td>
+                <td className="mono">{x.repo.split('/')[1]}{x.set === 'authors' && <span className="me">ME</span>}</td>
                 <td>
                   <a className="mono" href={`https://github.com/${x.repo}/commit/${x.sha}`} target="_blank" rel="noreferrer">{x.sha.slice(0, 7)}</a>
                   <div className="title">{x.title}</div>
@@ -160,25 +299,6 @@ function Runs({ repos }) {
   )
 }
 
-function Method() {
-  return (
-    <section className="method">
-      <h2>How it's measured</h2>
-      <ol>
-        <li><b>Pick real PRs.</b> Recent pull-request commits whose CI finished on GitHub; half of them with a failed run, so catching failures is measured too.</li>
-        <li><b>Rebuild what GitHub tested.</b> The PR head merged into its own base branch as it was when CI started, the same merge commit GitHub builds.</li>
-        <li><b>Run the jobs locally.</b> In a fresh Ubuntu container per job, with the workflow's own matrix, setup actions, services and marketplace actions.</li>
-        <li><b>Compare job by job.</b> Pass/fail of each job against GitHub's result for the same job name.</li>
-      </ol>
-      <p>
-        Kept out of the figure, and listed: failures of GitHub's own runner (a download that returned HTTP 5xx), and replays
-        that install another project's branch tip, which has moved since GitHub ran. Jobs that need Windows/macOS,
-        secrets, or the opened PR stay on GitHub and count against coverage, not accuracy.
-      </p>
-    </section>
-  )
-}
-
 export default function App() {
   const [data, setData] = useState(null)
   const [err, setErr] = useState('')
@@ -188,35 +308,45 @@ export default function App() {
       .then(setData)
       .catch((e) => setErr(String(e.message || e)))
   }, [])
-  const repos = (data?.repos || []).filter((r) => r.compared > 0)
+  const all = (data?.repos || []).filter((r) => r.compared > 0)
+  const sample = all.filter((r) => r.set !== 'authors')
+  const mine = all.filter((r) => r.set === 'authors')
+  const t = totals(all)
+  const shards = useMemo(
+    () => all.flatMap((r) => r.runs.map((x) => (r.set === 'authors' && outcome(x) === 'agree' ? 'mine' : outcome(x)))),
+    [data],
+  )
   return (
-    <main>
-      <header className="top">
-        <div className="brand">
-          <span className="logo" aria-hidden="true">✓</span>
-          <span>PreFlight</span>
+    <>
+      <div className="grain" aria-hidden="true" />
+      <nav className="nav">
+        <a className="brand" href="#top"><span className="mark" aria-hidden="true">◆</span>PREFLIGHT</a>
+        <div className="links">
+          {mine.length > 0 && <a href="#mine">My PRs</a>}
+          <a href="#projects">Benchmark</a>
+          <a href="#method">Method</a>
+          <a href="#ledger">Ledger</a>
+          <a className="gh" href="https://github.com/sahitya0xsingh/preflight" target="_blank" rel="noreferrer">GitHub ↗</a>
         </div>
-        <a className="gh" href="https://github.com/sahitya0xsingh/preflight" target="_blank" rel="noreferrer">GitHub</a>
-      </header>
-      <section className="hero">
-        <h1>Run a project's GitHub Actions CI on your laptop, and push only when it passes.</h1>
-        <p>
-          PreFlight reads a repo's workflows, works out which jobs a change triggers, and runs them in Docker the way
-          GitHub's runner does. This page measures how often its verdict matches GitHub's, on real pull requests.
-        </p>
-        <pre className="cmd">pip install git+https://github.com/sahitya0xsingh/preflight{'\n'}preflight check --docker   # before git push</pre>
-      </section>
-      {err && <p className="err">Could not load results.json ({err}). Run <code>npm run data</code>.</p>}
-      {!data && !err && <p className="loading">Loading results…</p>}
-      {repos.length > 0 && (
-        <>
-          <Totals repos={repos} />
-          <section className="cards">{repos.map((r) => <RepoCard key={r.repo} r={r} />)}</section>
-          <Method />
-          <Runs repos={repos} />
-          <footer>Results generated {new Date(data.generated).toLocaleString()} with <code>preflight bench</code>.</footer>
-        </>
-      )}
-    </main>
+      </nav>
+      <main id="top">
+        {err && <p className="status err">Could not load results.json ({err}).</p>}
+        {!data && !err && <p className="status">Loading results…</p>}
+        {all.length > 0 && (
+          <>
+            <Hero t={t} shards={shards} />
+            <Mine repos={mine} />
+            <Projects repos={sample} />
+            <Method />
+            <Ledger repos={all} />
+            <footer>
+              <span>Built by <a href="https://github.com/sahitya0xsingh" target="_blank" rel="noreferrer">Sahitya Singh</a></span>
+              <span className="mono">pip install git+https://github.com/sahitya0xsingh/preflight</span>
+              <span>Data from <code>preflight bench</code>, {new Date(data.generated).toLocaleDateString()}</span>
+            </footer>
+          </>
+        )}
+      </main>
+    </>
   )
 }
