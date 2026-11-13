@@ -89,7 +89,11 @@ def cmd_check(args) -> int:
     no_memory = [r for r in results if r.status == "failed" and r.oom]
     failed = [r for r in results if r.status == "failed" and not r.oom]
     cancelled = [r for r in results if r.status == "cancelled"]
+    other_arch = [r for r in results if r.status == "not-checked"]
     print()
+    if other_arch:
+        print(f"! {len(other_arch)} job run(s) need a tool version with no ARM64 build, so they were not checked here "
+              f"(GitHub will run them on x64): " + ", ".join(f"{r.workflow} / {r.label}" for r in other_arch))
     if no_memory:
         print(f"! {len(no_memory)} job run(s) ran out of Docker memory even alone, so they were not checked here "
               f"(GitHub will run them; more Docker memory lets them run): "

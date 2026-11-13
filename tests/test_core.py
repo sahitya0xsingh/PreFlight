@@ -598,3 +598,42 @@ def test_python_version_from_pyproject(tmp_path):
     from preflight import docker
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\nrequires-python = ">=3.11"\n')
     assert docker._version_file(tmp_path, "pyproject.toml") == ">=3.11"
+
+
+def test_artifacts_pass_between_docker_jobs(tmp_path):
+    import shutil, subprocess
+    import pytest
+    from preflight import check, docker, gitinfo
+    if not shutil.which("docker") or not docker.available():
+        pytest.skip("needs Docker")
+    (tmp_path / ".github" / "workflows").mkdir(parents=True)
+    (tmp_path / ".github" / "workflows" / "ci.yml").write_text("""
+on: pull_request
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        n: [1, 2]
+    steps:
+      - run: mkdir -p coverage && echo "SF:${{ matrix.n }}" > coverage/lcov.info
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.n }}
+          path: ./coverage/lcov.info
+  merge:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: ./coverage
+          pattern: coverage-*
+      - run: test "$(cat coverage/coverage-1/lcov.info coverage/coverage-2/lcov.info)" = "$(printf 'SF:1\\nSF:2')"
+""")
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x"], cwd=tmp_path, check=True)
+    plan = check.build_plan(tmp_path, "o/r", "main", [".github/workflows/ci.yml"], None, None, quick=False, docker=True)
+    results = check.execute(plan, tmp_path, fail_fast=True, verbose=False, snapshot="head", jobs=2)
+    assert [r.status for r in results] == ["passed", "passed", "passed"], [(r.label, r.status, r.steps) for r in results]

@@ -40,6 +40,11 @@ KNOWN: dict[str, tuple[str, str]] = {
     "actions/stale": ("skip", "bot"),
     "github/codeql-action/upload-sarif": ("skip", "uploads results to GitHub"),
     "codecov/codecov-action": ("skip", "uploads coverage"),
+    "codecov/test-results-action": ("skip", "uploads test results"),
+    "coverallsapp/github-action": ("skip", "uploads coverage to Coveralls"),
+    "actions/upload-pages-artifact": ("skip", "uploads a Pages site"),
+    "actions/deploy-pages": ("skip", "deploys to GitHub Pages"),
+    "actions/attest-build-provenance": ("skip", "signs build provenance"),
     "peter-evans/create-or-update-comment": ("skip", "comments on the PR"),
     # These run their tools in Docker containers of their own. Job containers
     # have no Docker daemon, so the job is left to GitHub.

@@ -327,10 +327,22 @@ def _run_case(repo: str, root: Path, case: Case, base_branch: str, per_case: int
         chosen.setdefault((p.wf.path, p.job.id), []).append(combo)
     if not picked:
         return rows
+    # Jobs the picked ones `need` run too (all their runs), as on GitHub: later jobs read their artifacts.
+    runnable = {}
+    for p in plan.to_run:
+        runnable.setdefault((p.wf.path, p.job.id), []).extend(p.combos)
+    todo = list(chosen)
+    while todo:
+        wf_path, job_id = todo.pop()
+        job = next(p.job for p in plan.jobs if (p.wf.path, p.job.id) == (wf_path, job_id))
+        for n in job.needs:
+            if (wf_path, n) in runnable and (wf_path, n) not in chosen:
+                chosen[(wf_path, n)] = list(runnable[(wf_path, n)])
+                todo.append((wf_path, n))
 
     sub = check.Plan(repo=plan.repo, base=plan.base, changed=plan.changed, docker=True, base_sha=base)
     for p in plan.to_run:
-        combos = chosen.get((p.wf.path, p.job.id))
+        combos = [c for c in chosen.get((p.wf.path, p.job.id), []) if c in p.combos]
         if combos:
             sub.jobs.append(check.PlannedJob(p.wf, p.job, combos, p.failures, "will-run"))
     results = check.execute(sub, root, fail_fast=False, verbose=False, snapshot="head", jobs=jobs)
@@ -344,6 +356,8 @@ def _run_case(repo: str, root: Path, case: Case, base_branch: str, per_case: int
         status = r.status
         if status == "failed" and fs and "set PREFLIGHT_GITHUB_TOKEN" in fs.detail:
             status = "needs-token"   # refused by GitHub's API for want of a token: not a verdict on the code
+        elif status == "not-checked":
+            status = "needs-x64"     # a tool version with no ARM64 build; GitHub runs x64
         elif status == "failed" and r.oom:
             status = "needs-memory"  # killed for memory even alone; GitHub's runner has 16 GB
         rw = row(Path(p.wf.path).name, g, "", status, f"'{fs.name}' {fs.detail}" if fs else "")
@@ -502,7 +516,7 @@ def _classified(repo: str) -> tuple[list[dict], list[dict], list[dict]]:
     return rows, moved, infra
 
 
-_NOT_RUN = ("left-to-github", "not-triggered", "unmatched", "needs-token", "needs-memory")
+_NOT_RUN = ("left-to-github", "not-triggered", "unmatched", "needs-token", "needs-memory", "needs-x64")
 
 
 def _not_run_key(r: dict) -> str:
@@ -510,6 +524,8 @@ def _not_run_key(r: dict) -> str:
         return "needs-token: set PREFLIGHT_GITHUB_TOKEN"
     if r["local"] == "needs-memory":
         return "needs-memory: Docker ran out of memory even with the job alone"
+    if r["local"] == "needs-x64":
+        return "needs-x64: the tool version has no ARM64 build"
     return f"{r['local']}: {r['reason'].split(':')[0] if r['local'] == 'left-to-github' else r['workflow']}"
 
 

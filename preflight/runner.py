@@ -70,7 +70,7 @@ class JobResult:
     workflow: str
     job_id: str
     label: str
-    status: str  # passed | failed | cancelled
+    status: str  # passed | failed | cancelled | not-checked (this machine cannot run it)
     steps: list[StepResult] = field(default_factory=list)
     log_path: Path | None = None
     seconds: float = 0.0
@@ -134,6 +134,54 @@ def _check_setup_action(step: Step, tool: str) -> tuple[bool, str]:
 
 def _input_env(name: str) -> str:
     return "INPUT_" + name.replace(" ", "_").upper()
+
+
+_UPLOAD_SH = r'''
+set -e
+shopt -s globstar nullglob dotglob
+files=()
+while IFS= read -r p; do
+  p="${p#"${p%%[![:space:]]*}"}"; p="${p%"${p##*[![:space:]]}"}"
+  case "$p" in ''|'!'*) continue;; esac
+  p="${p/#\~/$HOME}"
+  for f in $p; do files+=("$(realpath -s "$f")"); done
+done <<< "$A_PATH"
+if [ ${#files[@]} -eq 0 ]; then
+  msg="No files were found with the provided path: $(echo $A_PATH). No artifacts will be uploaded."
+  case "$A_IF_NONE" in error) echo "Error: $msg"; exit 1;; ignore) echo "$msg (ignored)"; exit 0;; *) echo "Warning: $msg"; exit 0;; esac
+fi
+# Like the real action: paths are kept relative to the least common ancestor of what was matched.
+if [ ${#files[@]} -eq 1 ] && [ -d "${files[0]}" ]; then root="${files[0]}"; else
+  root=$(dirname "${files[0]}")
+  for f in "${files[@]}"; do while [ "$root" != / ] && [ "${f#$root/}" = "$f" ]; do root=$(dirname "$root"); done; done
+fi
+dest="$ART/$A_NAME"; rm -rf "$dest"; mkdir -p "$dest"
+for f in "${files[@]}"; do
+  if [ "$f" = "$root" ]; then cp -a "$f/." "$dest/"; continue; fi
+  rel="${f#$root/}"; mkdir -p "$dest/$(dirname "$rel")"; cp -a "$f" "$dest/$rel"
+done
+echo "uploaded artifact '$A_NAME' ($(find "$dest" -type f | wc -l | tr -d ' ') files, kept for this run's other jobs)"
+echo "artifact-id=$A_NAME" >> "$GITHUB_OUTPUT"
+'''
+
+_DOWNLOAD_SH = r'''
+set -e
+dest="${A_PATH/#\~/$HOME}"; mkdir -p "$dest"
+if [ -n "$A_NAME" ]; then
+  [ -d "$ART/$A_NAME" ] || { echo "Error: Unable to download artifact(s): Artifact not found for name: $A_NAME"; exit 1; }
+  cp -a "$ART/$A_NAME/." "$dest/"; n=1
+else
+  n=0
+  for d in "$ART"/*/; do
+    a=$(basename "$d")
+    if [ -n "$A_PATTERN" ]; then case "$a" in $A_PATTERN) ;; *) continue;; esac; fi
+    if [ "$A_MERGE" = true ]; then cp -a "$d." "$dest/"; else mkdir -p "$dest/$a"; cp -a "$d." "$dest/$a/"; fi
+    n=$((n+1))
+  done
+fi
+echo "download-path=$(realpath "$dest")" >> "$GITHUB_OUTPUT"
+echo "downloaded $n artifact(s) to $A_PATH"
+'''
 
 
 @dataclass
@@ -427,6 +475,9 @@ class _JobRun:
             other = self._checkout_other(step, step_env, scope, name)
             if other is not None:
                 return other
+        if self.box and getattr(self.box, "artifacts", None) and \
+                actions.action_name(step.uses) in ("actions/upload-artifact", "actions/download-artifact"):
+            return self._artifact(step, step_env, scope, name)
         if kind in ("noop", "skip"):
             self.say(f"== {name}: skipped ({detail})")
             return StepResult(name, "skipped", f"{step.uses}: {detail}"), {}, 0
@@ -434,6 +485,27 @@ class _JobRun:
             self.say(f"== {name}: skipped ({detail}; --docker runs it)")
             return StepResult(name, "skipped", f"{step.uses}: {detail}"), {}, 0
         return self.run_action(step, step_env, scope, name)
+
+    # -- artifacts (Docker mode): kept in a volume the run's jobs share, one folder per workflow
+
+    def _artifact(self, step: Step, step_env: dict[str, Any], scope: _Scope,
+                  name: str) -> tuple[StepResult, dict[str, str], int]:
+        with_ = self.interp_map(step.with_, step_env, scope)
+        upload = actions.action_name(step.uses) == "actions/upload-artifact"
+        env = {
+            "ART": self.box.artifact_dir,
+            "A_NAME": str(with_.get("name") or ("artifact" if upload else "")),
+            "A_PATH": str(with_.get("path") or ("" if upload else ".")),
+            "A_PATTERN": str(with_.get("pattern") or ""),
+            "A_MERGE": str(with_.get("merge-multiple") or "false").lower(),
+            "A_IF_NONE": str(with_.get("if-no-files-found") or "warn").lower(),
+        }
+        out = self.run_script(_UPLOAD_SH if upload else _DOWNLOAD_SH, "bash", self.workspace,
+                              {**step_env, **env}, step.timeout_minutes)
+        msg = (out.log_text.strip().splitlines() or [""])[-1][:200]
+        self.say(f"== {name}: {msg}")
+        status = "passed" if out.code == 0 else "failed"
+        return StepResult(name, status, msg if out.code else ""), out.outputs, out.code
 
     # -- real actions (Docker mode)
 

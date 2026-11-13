@@ -25,6 +25,11 @@ Docker, and compares each job's pass/fail with GitHub's.
 | --- | --- | --- | --- | --- | --- | --- |
 | [checkstyle/checkstyle](https://github.com/checkstyle/checkstyle) | Java (Maven) | 25 | 78 | **98.7%** | 25/26 | 0 |
 | [pallets/flask](https://github.com/pallets/flask) | Python (uv, tox) | 20 | 117 | **100%** | 13/13 | 0 |
+| [expressjs/express](https://github.com/expressjs/express) | JavaScript (Node.js, npm) | 20 | 114 | **100%** | 33/33 | 0 |
+| **All three** | | **65** | **309** | **99.7%** | **71/72** | **0** |
+
+Coverage (the share of GitHub's jobs PreFlight can run on a Mac) is 88% for checkstyle and Flask and 55% for
+Express, whose test matrix runs every Node.js version on Windows too; Windows and macOS jobs stay on GitHub.
 
 The dashboard lists every compared job run with a link to GitHub's own job page. Rebuild its data with
 `npm --prefix dashboard run data` after a benchmark.
@@ -56,7 +61,11 @@ preflight install-hook --docker        # the same, before every push
 - Jobs run in parallel: by default about one per 2.5 GB of Docker memory, up to 4 (`--jobs N` / `-j N` to change).
   A job starts once every job it `needs` has passed. The first failure stops the running containers and cancels the
   rest, unless you pass `--keep-going`; with it, jobs that need a failed job are reported as not run.
-- Jobs that need Windows or macOS runners, secrets, or the PR itself are still left to GitHub.
+- `upload-artifact` / `download-artifact` pass files between the jobs of a run (through a Docker volume kept for
+  that run, one folder per workflow), so a `coverage` job that merges its test jobs' reports works as on GitHub.
+- A matrix whose `runs-on` reads the matrix (`${{ matrix.os }}`) is split per runner: the Linux entries run here.
+- Jobs that need Windows or macOS runners, secrets, or the PR itself are still left to GitHub. On an ARM Mac, a
+  tool version with no ARM64 build (Node.js 0.12, …) is reported as not checked rather than failed.
 - Each job sees 4 CPUs, like GitHub's standard runner. A job the kernel kills for want of memory is run again on
   its own; if it still runs out, it is reported as not checked (GitHub's runner has 16 GB) and does not block the push.
   With `--keep-going`, every failure is confirmed by running it alone, since timing checks can fail from sharing.

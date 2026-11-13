@@ -40,6 +40,7 @@ class Plan:
     other_ci: list[str] = field(default_factory=list)
     docker: bool = False
     base_sha: str | None = None   # merge base of the branch and its base, the PR's parent commit
+    artifacts: str | None = None  # Docker volume the run's jobs share artifacts through
 
     @property
     def to_run(self) -> list[PlannedJob]:
@@ -280,13 +281,18 @@ def _run_one(p: PlannedJob, combo: dict[str, Any], ctx_values: dict[str, Any], r
     box = None
     try:
         box = dockermod.DockerJob(p.job, combo, ctx, plan.repo, root, snapshot, say=say,
-                                  base_sha=plan.base_sha)
+                                  base_sha=plan.base_sha, artifacts=plan.artifacts,
+                                  artifact_scope=Path(p.wf.path).name)
         active.add(box)
         if cancel.is_set():
             return JobResult(p.wf.name, p.job.id, label, "cancelled", log_path=None)
         box.start()
         res = run_job(p.wf, p.job, combo, ctx_values, root, log, "Linux", echo=verbose, box=box,
                       cancel=cancel, echo_prefix=echo_prefix)
+        fs = res.failed_step
+        if res.status == "failed" and fs and "has no linux-arm64 build" in fs.detail:
+            res.status = "not-checked"   # GitHub runs x64; this ARM machine cannot run that tool version
+            return res
         if res.status == "failed" and box.oom_kills():
             res.oom = True
             with log.open("a") as f:
@@ -307,6 +313,19 @@ def _run_one(p: PlannedJob, combo: dict[str, Any], ctx_values: dict[str, Any], r
 
 def execute(plan: Plan, root: Path, fail_fast: bool, verbose: bool, snapshot: str = "worktree",
             jobs: int = 1) -> list[JobResult]:
+    """Run the plan (see ``_execute``); in Docker mode, jobs share one artifact volume for the run."""
+    if plan.docker:
+        plan.artifacts = dockermod.new_artifact_volume()
+    try:
+        return _execute(plan, root, fail_fast, verbose, snapshot, jobs)
+    finally:
+        if plan.artifacts:
+            dockermod.remove_volume(plan.artifacts)
+            plan.artifacts = None
+
+
+def _execute(plan: Plan, root: Path, fail_fast: bool, verbose: bool, snapshot: str = "worktree",
+             jobs: int = 1) -> list[JobResult]:
     """Run the plan, up to ``jobs`` job runs at a time (Docker mode only).
 
     A job starts once every job it ``needs`` has passed. With ``fail_fast``,
@@ -320,7 +339,9 @@ def execute(plan: Plan, root: Path, fail_fast: bool, verbose: bool, snapshot: st
     order = _needs_order(plan.to_run)
     keys = {(p.wf.path, p.job.id) for p in order}
     pending = [(p, combo) for p in order for combo in p.combos]
-    left = {(p.wf.path, p.job.id): len(p.combos) for p in order}   # unfinished runs per job
+    left: dict[tuple[str, str], int] = {}                           # unfinished runs per job
+    for p in order:   # a job split by runner (matrix runs-on) is several planned jobs with one key
+        left[(p.wf.path, p.job.id)] = left.get((p.wf.path, p.job.id), 0) + len(p.combos)
     outcome: dict[tuple[str, str], str] = {}                      # job -> passed | failed | blocked
     results: list[tuple[int, JobResult]] = []
     order_index = {id(u): i for i, u in enumerate(pending)}
@@ -394,7 +415,7 @@ def execute(plan: Plan, root: Path, fail_fast: bool, verbose: bool, snapshot: st
                     if res.status == "cancelled":
                         print(f"  ■ {p.wf.name} / {res.label}: cancelled")
                     else:
-                        mark = "✓" if res.status == "passed" else "✗"
+                        mark = {"passed": "✓", "not-checked": "–"}.get(res.status, "✗")
                         tail = f": '{res.failed_step.name}' {res.failed_step.detail}" if res.failed_step else ""
                         print(f"  {mark} {p.wf.name} / {res.label} {res.status} in {res.seconds:.0f}s{tail}")
                     if res.status == "failed":
@@ -446,7 +467,7 @@ def _print_log_tail(path: Path | None, lines: int = 25) -> None:
 def write_report(plan: Plan, results: list[JobResult], path: Path, root: Path) -> None:
     passed = [r for r in results if r.status == "passed"]
     failed = [r for r in results if r.status == "failed" and not r.oom]
-    no_memory = [r for r in results if r.status == "failed" and r.oom]
+    no_memory = [r for r in results if (r.status == "failed" and r.oom) or r.status == "not-checked"]
     cancelled = [r for r in results if r.status == "cancelled"]
     lines = [
         "## PreFlight local CI report",
@@ -461,7 +482,7 @@ def write_report(plan: Plan, results: list[JobResult], path: Path, root: Path) -
         "| --- | --- |",
     ]
     for r in results:
-        lines.append(f"| {r.workflow} / {r.label} | {'not checked (out of memory)' if r.oom else r.status} |")
+        lines.append(f"| {r.workflow} / {r.label} | {'not checked (out of memory)' if r.oom else 'not checked (needs x64)' if r.status == 'not-checked' else r.status} |")
     if plan.skipped:
         lines += ["", "Not run locally (left to GitHub):", ""]
         lines += [f"- {p.wf.name} / {p.job.id}: {p.reason}" for p in plan.skipped]

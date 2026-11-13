@@ -234,8 +234,11 @@ echo PATH+={d}/bin
         v = resolve_node(spec)
         d = f"{TOOL_CACHE}/node/{v}/{gh_arch.lower()}"
         url = f"https://nodejs.org/dist/v{v}/node-v{v}-linux-{dl_arch}.tar.gz"
+        no_arm = (f"curl -fsIL '{url}' >/dev/null || {{ echo 'Node.js {v} has no linux-arm64 build "
+                  f"(GitHub runs x64), so it is not checked here' >&2; exit 3; }}") if dl_arch == "arm64" else ":"
         script = f"""
 if [ ! -x {d}/bin/node ]; then
+  {no_arm}
   mkdir -p {d} && curl -fsSL '{url}' | tar -xz -C {d} --strip-components=1
 fi
 echo PATH+={d}/bin
@@ -291,12 +294,24 @@ def _container_spec(job_container: Any, ctx: expr.Context) -> dict[str, Any] | N
     return spec if spec.get("image") else None
 
 
+def new_artifact_volume() -> str:
+    name = f"preflight-artifacts-{uuid.uuid4().hex[:10]}"
+    _docker("volume", "create", "--label", "org.preflight=1", name, timeout=60)
+    return name
+
+
+def remove_volume(name: str) -> None:
+    _docker("volume", "rm", "-f", name, check=False, timeout=60)
+
+
 class DockerJob:
     """A running job container plus its service containers."""
 
     def __init__(self, job, combo: dict[str, Any], ctx: expr.Context, repo: str, root: Path,
-                 snapshot: str, say: Callable[[str], None], base_sha: str | None = None):
+                 snapshot: str, say: Callable[[str], None], base_sha: str | None = None,
+                 artifacts: str | None = None, artifact_scope: str = ""):
         self.job = job
+        self.artifacts = artifacts
         self.root = root
         self.say = say
         self.id = uuid.uuid4().hex[:10]
@@ -311,11 +326,16 @@ class DockerJob:
             self.workspace = f"/__w/{repo_name}/{repo_name}"
             self.temp = "/__w/_temp"
             self.actions_root = "/__w/_actions"
+            art_root = "/__w/_artifacts"
         else:
             self.image = ensure_runner_image(ubuntu_version(job.runs_on), say)
             self.workspace = f"/home/runner/work/{repo_name}/{repo_name}"
             self.temp = "/home/runner/work/_temp"
             self.actions_root = "/home/runner/work/_actions"
+            art_root = "/home/runner/work/_artifacts"
+        # Artifacts belong to a workflow run, so each workflow file gets its own folder.
+        self.artifact_root = art_root
+        self.artifact_dir = f"{art_root}/{re.sub(r'[^A-Za-z0-9._-]', '_', artifact_scope) or 'run'}"
         self.snapshot = snapshot
         self.ctx = ctx
         self.default_path = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -337,6 +357,8 @@ class DockerJob:
         else:
             for vol, path in CACHE_VOLUMES.items():
                 args += ["-v", f"{vol}:{path}"]
+        if self.artifacts:
+            args += ["-v", f"{self.artifacts}:{self.artifact_root}"]
         args += ["--entrypoint", "tail", self.image, "-f", "/dev/null"]
         if self.spec:
             self.say(f"  pulling {self.image} if needed...")
@@ -352,6 +374,9 @@ class DockerJob:
         self.sh(f"chown -R $(id -u {self._user()}):$(id -g {self._user()}) {shlex.quote(self.workspace)} {self.temp}"
                 f" && chown $(id -u {self._user()}):$(id -g {self._user()}) {shlex.quote(posixpath.dirname(self.workspace))}",
                 root=True, check=False)
+        if self.artifacts:
+            self.sh(f"mkdir -p {shlex.quote(self.artifact_dir)} && chown $(id -u {self._user()}):$(id -g {self._user()})"
+                    f" {self.artifact_root} {shlex.quote(self.artifact_dir)}", root=True, check=False)
         self._copy_workspace()
         self._start_services()
 
