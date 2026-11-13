@@ -58,10 +58,20 @@ def _pr_base(repo: str, sha: str, runs: list[dict[str, Any]]) -> str:
             if ref:
                 return ref
     try:
-        prs = github.api(f"repos/{repo}/commits/{sha}/pulls")
+        prs = github.api(f"repos/{repo}/commits/{sha}/pulls") or []
     except Exception:
-        return ""
-    return next(((pr.get("base") or {}).get("ref", "") for pr in prs or []), "")
+        prs = []
+    for r in runs if not prs else []:   # fork PRs: look the PR up by the fork's branch
+        owner = ((r.get("head_repository") or {}).get("owner") or {}).get("login")
+        if owner and r.get("head_branch"):
+            try:
+                prs = github.api(f"repos/{repo}/pulls?state=all&head={owner}:{r['head_branch']}") or []
+            except Exception:
+                prs = []
+            prs = [pr for pr in prs if (pr.get("head") or {}).get("sha") == sha] or prs
+            if prs:
+                break
+    return next(((pr.get("base") or {}).get("ref", "") for pr in prs), "")
 
 
 def bench_dir(repo: str) -> Path:
@@ -113,16 +123,33 @@ def sample_cases(repo: str, count: int, failing_share: float, pages: int = 5, sk
         candidates[-1]._runs = list(latest.values())  # type: ignore[attr-defined]
     candidates.sort(key=lambda c: c.created_at, reverse=True)
     want_fail = round(count * failing_share)
-    failing = [c for c in candidates if c.failed][:want_fail]
-    passing = [c for c in candidates if not c.failed][:count - len(failing)]
-    picked = sorted(failing + passing, key=lambda c: c.created_at, reverse=True)
-    for c in picked:
-        c.base = _pr_base(repo, c.sha, c._runs)  # type: ignore[attr-defined]
+    want = {True: want_fail, False: count - want_fail}
+    picked: list[Case] = []
+    for c in candidates:   # newest first; fetch jobs only for cases that may be picked
+        if want[c.failed] <= 0:
+            continue
+        runs = []
         for r in c._runs:  # type: ignore[attr-defined]
-            for j in github.paginate(f"repos/{repo}/actions/runs/{r['id']}/jobs?filter=latest", key="jobs"):
-                c.jobs.append(GhJob(workflow=Path(r["path"]).name, name=j["name"],
-                                    conclusion=j.get("conclusion") or "", seconds=_seconds(j),
-                                    url=j.get("html_url", "")))
+            jobs = [GhJob(workflow=Path(r["path"]).name, name=j["name"], conclusion=j.get("conclusion") or "",
+                          seconds=_seconds(j), url=j.get("html_url", ""))
+                    for j in github.paginate(f"repos/{repo}/actions/runs/{r['id']}/jobs?filter=latest", key="jobs")]
+            if jobs:   # a run with no jobs never started (workflow refused or invalid): nothing to compare
+                runs.append(r)
+                c.jobs += jobs
+        if len(runs) < 2:
+            continue
+        c.workflows = sorted(Path(r["path"]).name for r in runs)
+        failed = any(r["conclusion"] == "failure" for r in runs)
+        if failed != c.failed:
+            c.failed = failed
+            if want[failed] <= 0:
+                continue
+        c.base = _pr_base(repo, c.sha, runs)
+        want[failed] -= 1
+        picked.append(c)
+        if not any(v > 0 for v in want.values()):
+            break
+    picked.sort(key=lambda c: c.created_at, reverse=True)
     return picked
 
 
@@ -451,7 +478,8 @@ def _moving_dependency(path: str) -> bool:
     return bool(_MOVING_REF.search(text) and _RESOLVE_FAIL.search(text))
 
 
-def report(repo: str, target: float = 0.95) -> str:
+def _classified(repo: str) -> tuple[list[dict], list[dict], list[dict]]:
+    """Saved rows with the report-time reclassifications: (rows, moving-dependency rows, GitHub-infra rows)."""
     rows = [json.loads(line) for line in (bench_dir(repo) / "results.jsonl").read_text().splitlines() if line.strip()]
     for r in rows:   # rows written before needs-memory existed
         if r["local"] == "failed" and r.get("log") and _oom_log(r["log"]):
@@ -471,12 +499,61 @@ def report(repo: str, target: float = 0.95) -> str:
                 r["github"], r["reason"] = "infra-failure", why
                 infra.append(r)
     cache_file.write_text(json.dumps(cache, indent=1))
+    return rows, moved, infra
+
+
+_NOT_RUN = ("left-to-github", "not-triggered", "unmatched", "needs-token", "needs-memory")
+
+
+def _not_run_key(r: dict) -> str:
+    if r["local"] == "needs-token":
+        return "needs-token: set PREFLIGHT_GITHUB_TOKEN"
+    if r["local"] == "needs-memory":
+        return "needs-memory: Docker ran out of memory even with the job alone"
+    return f"{r['local']}: {r['reason'].split(':')[0] if r['local'] == 'left-to-github' else r['workflow']}"
+
+
+def summary(repo: str) -> dict[str, Any]:
+    """The report's numbers as data (for ``--export`` and the dashboard)."""
+    rows, moved, infra = _classified(repo)
+    ran = [r for r in rows if r["local"] in ("passed", "failed") and r["github"] in CONCLUSIVE]
+    gh_pass = [r for r in ran if r["github"] == "success"]
+    gh_fail = [r for r in ran if r["github"] == "failure"]
+    conclusive = [r for r in rows if r["github"] in CONCLUSIVE]
+    trig = [r for r in conclusive if r["local"] != "unmatched"]
+    not_run: dict[str, int] = {}
+    for r in conclusive:
+        if r["local"] in _NOT_RUN:
+            not_run[_not_run_key(r)] = not_run.get(_not_run_key(r), 0) + 1
+    keep = ("sha", "title", "workflow", "job", "github", "local", "reason", "seconds", "gh_seconds", "url")
+    return {
+        "repo": repo,
+        "cases": len({r["sha"] for r in rows}),
+        "compared": len(ran),
+        "agree": sum(_agrees(r) for r in ran),
+        "github_passed": len(gh_pass),
+        "github_passed_agree": sum(_agrees(r) for r in gh_pass),
+        "github_failed": len(gh_fail),
+        "github_failed_agree": sum(_agrees(r) for r in gh_fail),
+        "missed_failures": sum(r["local"] == "passed" for r in gh_fail),
+        "false_alarms": sum(r["local"] == "failed" for r in gh_pass),
+        "coverage": [sum(r["local"] not in _NOT_RUN for r in conclusive), len(conclusive)],
+        "triggers": [sum(r["local"] != "not-triggered" for r in trig), len(trig)],
+        "infra": len(infra),
+        "moved": len(moved),
+        "not_run": dict(sorted(not_run.items(), key=lambda kv: -kv[1])),
+        "runs": [{k: r.get(k) for k in keep} for r in ran + infra + moved],
+    }
+
+
+def report(repo: str, target: float = 0.95) -> str:
+    rows, moved, infra = _classified(repo)
     ran = [r for r in rows if r["local"] in ("passed", "failed") and r["github"] in CONCLUSIVE]
     gh_pass = [r for r in ran if r["github"] == "success"]
     gh_fail = [r for r in ran if r["github"] == "failure"]
     agree = sum(_agrees(r) for r in ran)
     conclusive = [r for r in rows if r["github"] in CONCLUSIVE]
-    covered = [r for r in conclusive if r["local"] not in ("left-to-github", "not-triggered", "unmatched", "needs-token", "needs-memory")]
+    covered = [r for r in conclusive if r["local"] not in _NOT_RUN]
     trig = [r for r in conclusive if r["local"] != "unmatched"]
     trig_ok = [r for r in trig if r["local"] != "not-triggered"]
     cases = {r["sha"] for r in rows}
@@ -522,15 +599,25 @@ def report(repo: str, target: float = 0.95) -> str:
                   for r in moved]
     left: dict[str, int] = {}
     for r in conclusive:
-        if r["local"] in ("left-to-github", "not-triggered", "unmatched", "needs-token", "needs-memory"):
-            key = "needs-token: set PREFLIGHT_GITHUB_TOKEN" if r["local"] == "needs-token" else \
-                "needs-memory: Docker ran out of memory even with the job alone" if r["local"] == "needs-memory" else \
-                f"{r['local']}: {r['reason'].split(':')[0] if r['local'] == 'left-to-github' else r['workflow']}"
-            left[key] = left.get(key, 0) + 1
+        if r["local"] in _NOT_RUN:
+            left[_not_run_key(r)] = left.get(_not_run_key(r), 0) + 1
     if left:
         lines += ["", "## Not run locally", "", "| Why | GitHub job runs |", "| --- | --- |"]
         lines += [f"| {k} | {v} |" for k, v in sorted(left.items(), key=lambda kv: -kv[1])]
     return "\n".join(lines) + "\n"
+
+
+def export(path: Path) -> list[str]:
+    """Write every benchmarked repo's summary to one JSON file; return the repos."""
+    root = profile.home() / "bench"
+    repos = []
+    for d in sorted(root.iterdir()) if root.is_dir() else []:
+        if (d / "results.jsonl").exists() and (d / "cases.json").exists():
+            owner, _, name = d.name.partition("_")
+            repos.append(f"{owner}/{name}")
+    data = {"generated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "repos": [summary(r) for r in repos]}
+    path.write_text(json.dumps(data, indent=1))
+    return repos
 
 
 # ---------------------------------------------------------------- fast follow-ups

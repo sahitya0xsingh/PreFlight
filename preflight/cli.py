@@ -110,6 +110,10 @@ def cmd_check(args) -> int:
 
 
 def cmd_bench(args) -> int:
+    if args.export:
+        repos = bench.export(Path(args.export))
+        print(f"Wrote {args.export}: {', '.join(repos) or 'no benchmarked repos yet'}")
+        return 0
     repo = args.repo
     if not repo:
         try:
@@ -215,6 +219,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--seed", type=int, default=1)
     s.add_argument("--base", help="base branch (default: the repo's default branch)")
     s.add_argument("--report", action="store_true", help="only print the report from results so far")
+    s.add_argument("--export", metavar="FILE", help="write every benchmarked repo's results to one JSON file (for the dashboard)")
     s.add_argument("--reset", action="store_true", help="forget earlier cases and results")
     s.add_argument("--replan", action="store_true",
                    help="re-plan saved cases with this PreFlight (no jobs run); jobs now left to GitHub leave the comparison")
