@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { mountCrystal } from './Crystal.js'
 import Guide from './Guide.jsx'
 import Logo from './Logo.jsx'
+import { AetherBg, Cursor, Marquee, Preloader, Title, useTilt } from './Fx.jsx'
 
 const ACCOUNTS = ['sahitya0xsingh', 'Sahitya0805']
 const LANG = {
@@ -62,7 +63,7 @@ function Count({ to, decimals = 0, suffix = '' }) {
 }
 
 // Fades children in as they enter the viewport.
-function Reveal({ children, delay = 0, className = '' }) {
+function Reveal({ children, delay = 0, className = '', tilt = false }) {
   const ref = useRef(null)
   const [shown, setShown] = useState(false)
   useEffect(() => {
@@ -71,7 +72,8 @@ function Reveal({ children, delay = 0, className = '' }) {
     return () => io.disconnect()
   }, [])
   return (
-    <div ref={ref} className={`reveal ${shown ? 'in' : ''} ${className}`} style={{ transitionDelay: `${delay}ms` }}>
+    <div ref={ref} data-tilt={tilt || undefined} className={`reveal ${shown ? 'in' : ''} ${className}`} style={{ transitionDelay: `${delay}ms` }}>
+      {tilt && <span className="glare" aria-hidden="true" />}
       {children}
     </div>
   )
@@ -184,7 +186,7 @@ function Mine({ repos }) {
     <section className="block mine" id="mine">
       <Reveal><p className="kicker">01 — MY OWN PULL REQUESTS</p></Reveal>
       <Reveal delay={80}>
-        <h2>Tested on the PRs I sent to open source.</h2>
+        <Title>Tested on the PRs I sent to open source.</Title>
       </Reveal>
       <Reveal delay={140}>
         <div className="accounts">
@@ -196,13 +198,13 @@ function Mine({ repos }) {
         </div>
       </Reveal>
       <div className="mine-grid">
-        <Reveal className="glass stat-xl">
+        <Reveal className="glass stat-xl" tilt>
           <div className="k">Agreement on my PRs</div>
           <div className="v"><Count to={pct(t.agree, t.compared)} decimals={1} suffix="%" /></div>
           <div className="s">{t.agree}/{t.compared} job runs · {t.cases} PRs · {repos.length} repos</div>
         </Reveal>
         {repos.map((r, i) => (
-          <Reveal key={r.repo} delay={60 * i} className="glass mini">
+          <Reveal key={r.repo} delay={60 * i} className="glass mini" tilt>
             <a className="repo" href={`https://github.com/${r.repo}/pulls?q=author%3A${authors[0] || ACCOUNTS[0]}`} target="_blank" rel="noreferrer">{r.repo}</a>
             <div className="mini-row">
               <Ring value={pct(r.agree, r.compared)} size={64} />
@@ -223,14 +225,14 @@ function Projects({ repos }) {
     <section className="block" id="projects">
       <Reveal><p className="kicker">02 — BENCHMARK ACROSS LANGUAGES</p></Reveal>
       <Reveal delay={80}>
-        <h2>Random recent PRs, {repos.length} projects, {new Set(repos.map((r) => (LANG[r.repo] || [''])[0].split(' · ').pop())).size} languages, one verdict.</h2>
+        <Title>{`Random recent PRs, ${repos.length} projects, ${new Set(repos.map((r) => (LANG[r.repo] || [''])[0].split(' · ').pop())).size} languages, one verdict.`}</Title>
       </Reveal>
       <div className="cards">
         {repos.map((r, i) => {
           const [lang, stack] = LANG[r.repo] || ['', '']
           const acc = pct(r.agree, r.compared)
           return (
-            <Reveal key={r.repo} delay={90 * i} className="glass card">
+            <Reveal key={r.repo} delay={90 * i} className="glass card" tilt>
               <div className="card-top">
                 <span className="tag">{lang}</span>
                 <a className="repo" href={`https://github.com/${r.repo}`} target="_blank" rel="noreferrer">{r.repo} ↗</a>
@@ -269,7 +271,7 @@ function Method() {
   return (
     <section className="block" id="method">
       <Reveal><p className="kicker">03 — METHOD</p></Reveal>
-      <Reveal delay={80}><h2>No synthetic tests. Real PRs, replayed.</h2></Reveal>
+      <Title>No synthetic tests. Real PRs, replayed.</Title>
       <ol className="steps">
         {STEPS.map(([h, p], i) => (
           <Reveal key={h} delay={90 * i} className="step">
@@ -306,7 +308,7 @@ function Ledger({ repos }) {
   return (
     <section className="block" id="ledger">
       <Reveal><p className="kicker">04 — THE LEDGER</p></Reveal>
-      <Reveal delay={80}><h2>Every compared job run.</h2></Reveal>
+      <Title>Every compared job run.</Title>
       <div className="filters">
         <select value={repo} onChange={(e) => setRepo(e.target.value)} aria-label="Project">
           <option value="all">All projects</option>
@@ -351,6 +353,7 @@ export default function App() {
   const [data, setData] = useState(null)
   const [err, setErr] = useState('')
   const [theme, setTheme] = useTheme()
+  useTilt()
   useEffect(() => {
     fetch('./results.json')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
@@ -370,6 +373,9 @@ export default function App() {
   )
   return (
     <>
+      <AetherBg />
+      <Preloader ready={!!data || !!err} />
+      <Cursor />
       <div className="grain" aria-hidden="true" />
       <svg width="0" height="0" style={{ position: 'absolute' }} aria-hidden="true">
         <defs>
@@ -397,11 +403,13 @@ export default function App() {
         {all.length > 0 && (
           <>
             <Hero t={t} shards={shards} theme={theme} />
+            <Marquee items={[...new Set(all.flatMap((r) => r.runs.map((x) => x.job)))].slice(0, 40)} />
             <Mine repos={mine} />
             <Projects repos={sample} />
             <Method />
             <Ledger repos={all} />
-            <Guide Reveal={Reveal} />
+            <Marquee items={['preflight plan', 'preflight check --docker', 'preflight install-hook', 'preflight bench', 'git push', '✓ green', 'docker run', 'merge commit', 'job by job']} />
+            <Guide Reveal={Reveal} Title={Title} />
             <footer>
               <span>Built by <a href="https://github.com/sahitya0xsingh" target="_blank" rel="noreferrer">Sahitya Singh</a></span>
               <span className="mono">pip install git+https://github.com/sahitya0xsingh/preflight</span>

@@ -5,11 +5,11 @@ import * as THREE from 'three'
 
 // Colours per theme (the page's palette picker); disagree/excluded keep their meaning everywhere.
 export const PALETTES = {
-  ice: { agree: '#d9f1ff', mine: '#5ee4ff', dust: '#33508c', core: '#5b7cff', disagree: '#ff5a4e', excluded: '#ffc46b' },
-  aurora: { agree: '#dcfff3', mine: '#2ef2b8', dust: '#4b3a8a', core: '#9b6bff', disagree: '#ff5a4e', excluded: '#ffc46b' },
-  nebula: { agree: '#f1e6ff', mine: '#ff5fb7', dust: '#4a3480', core: '#c38bff', disagree: '#ff4d3d', excluded: '#ffd27a' },
-  solar: { agree: '#fff0dc', mine: '#ffb547', dust: '#7a3a3a', core: '#ff5e7e', disagree: '#ff3b3b', excluded: '#ffe08a' },
-  paper: { agree: '#1b2638', mine: '#2556e6', dust: '#b4b9c4', core: '#7c3aed', disagree: '#d63a2f', excluded: '#b7791f', light: true },
+  ice: { agree: '#cfe2ee', mine: '#a3d2e6', dust: '#2f4058', core: '#8e9ad6', disagree: '#e8786e', excluded: '#e2bf86' },
+  aurora: { agree: '#d2ebe2', mine: '#9cd6c2', dust: '#3a3f5c', core: '#ad9fdc', disagree: '#e8786e', excluded: '#e2bf86' },
+  nebula: { agree: '#e6dcf3', mine: '#e2a9c4', dust: '#3f3657', core: '#c3b0e6', disagree: '#ea7468', excluded: '#e6c58e' },
+  solar: { agree: '#f2e4d1', mine: '#e5c393', dust: '#56403a', core: '#dfa1a0', disagree: '#e8655a', excluded: '#efd59a' },
+  paper: { agree: '#1e2737', mine: '#4a63ad', dust: '#b9bdc6', core: '#7d64b0', disagree: '#c2453a', excluded: '#a77a2c', light: true },
 }
 
 const CODE = [

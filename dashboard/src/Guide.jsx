@@ -144,13 +144,13 @@ function Terminal({ cmd, out, real }) {
 
 const md = (s) => s.split(/(`[^`]+`)/).map((p, i) => (p.startsWith('`') ? <code key={i}>{p.slice(1, -1)}</code> : p))
 
-export default function Guide({ Reveal }) {
+export default function Guide({ Reveal, Title }) {
   const [tab, setTab] = useState('start')
   const cur = TABS.find((t) => t.id === tab)
   return (
     <section className="block" id="guide">
       <Reveal><p className="kicker">05 — GUIDE</p></Reveal>
-      <Reveal delay={80}><h2>From install to a green push.</h2></Reveal>
+      <Title>From install to a green push.</Title>
       <Reveal delay={120}>
         <div className="tabs" role="tablist">
           {TABS.map((t) => (
