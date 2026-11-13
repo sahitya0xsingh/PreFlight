@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+import json
 import os
 import subprocess
 import threading
@@ -138,25 +140,58 @@ def build_plan(root: Path, repo: str, base: str, changed: list[str], prof: dict 
         for job in wf.jobs:
             if only and not any(o.lower() in (job.id.lower(), wf.name.lower(), rel.lower()) for o in only):
                 continue
-            workflow.classify(job, host, docker, root)
             fails = profile.failure_count(prof, repo, wf.path, job.id)
             combos = workflow.expand_matrix(job.matrix) if not isinstance(job.matrix, str) else [{}]
             if quick:
                 combos = combos[:1]
-            pj = PlannedJob(wf=wf, job=job, combos=combos, failures=fails, status="will-run")
-            if job.verdict not in workflow.RUNNABLE:
-                pj.status, pj.reason = "skip", f"{job.verdict}: {'; '.join(job.reasons)}"
-            else:
-                try:
-                    ok = expr.evaluate_condition(job.if_, expr.Context(values=ctx_values))
-                except expr.ExpressionError as e:
-                    ok, pj.reason = True, f"could not read job `if:` ({e}); running it"
-                if not ok:
-                    pj.status, pj.reason = "skip", "job condition is false for a PR"
-            plan.jobs.append(pj)
+            for job, combos in _runner_groups(job, combos, ctx_values):
+                workflow.classify(job, host, docker, root)
+                pj = PlannedJob(wf=wf, job=job, combos=combos, failures=fails, status="will-run")
+                if job.verdict not in workflow.RUNNABLE:
+                    pj.status, pj.reason = "skip", f"{job.verdict}: {'; '.join(job.reasons)}"
+                else:
+                    try:
+                        ok = expr.evaluate_condition(job.if_, expr.Context(values=ctx_values))
+                    except expr.ExpressionError as e:
+                        ok, pj.reason = True, f"could not read job `if:` ({e}); running it"
+                    if not ok:
+                        pj.status, pj.reason = "skip", "job condition is false for a PR"
+                plan.jobs.append(pj)
     # Likely failures first, then smaller jobs, so a red result comes early.
     plan.jobs.sort(key=lambda p: (-p.failures, len(p.combos) * len(p.job.steps)))
     return plan
+
+
+def _runner_groups(job: workflow.Job, combos: list[dict[str, Any]],
+                   ctx_values: dict[str, Any]) -> list[tuple[workflow.Job, list[dict[str, Any]]]]:
+    """Split a job whose ``runs-on`` reads the matrix into one job per runner.
+
+    ``runs-on: ${{ matrix.os || 'ubuntu-latest' }}`` gives each matrix entry its own
+    runner, so the Linux entries can run here while the Windows and macOS ones stay on GitHub.
+    """
+    if "matrix." not in json.dumps(job.runs_on, default=str) or combos == [{}]:
+        return [(job, combos)]
+
+    def resolve(value: Any, combo: dict[str, Any]) -> Any:
+        if isinstance(value, str) and "${{" in value:
+            ctx = expr.Context(values={**ctx_values, "matrix": combo})
+            text = value.strip()
+            if text.startswith("${{") and text.endswith("}}") and text.count("${{") == 1:
+                return expr.evaluate(text[3:-2], ctx)
+            return expr.interpolate(value, ctx)
+        if isinstance(value, list):
+            return [resolve(v, combo) for v in value]
+        return value
+
+    groups: dict[str, tuple[Any, list[dict[str, Any]]]] = {}
+    for combo in combos:
+        try:
+            runs_on = resolve(job.runs_on, combo)
+        except expr.ExpressionError:
+            return [(job, combos)]
+        key = json.dumps(runs_on, sort_keys=True, default=str)
+        groups.setdefault(key, (runs_on, []))[1].append(combo)
+    return [(dataclasses.replace(job, runs_on=runs_on, reasons=[]), cs) for runs_on, cs in groups.values()]
 
 
 def print_plan(plan: Plan) -> None:

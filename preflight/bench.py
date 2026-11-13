@@ -47,6 +47,21 @@ class Case:
     failed: bool         # any of its workflow runs failed
     workflows: list[str] = field(default_factory=list)   # workflow files GitHub ran
     jobs: list[GhJob] = field(default_factory=list)
+    base: str = ""       # the PR's base branch ("" = the repo's default branch)
+
+
+def _pr_base(repo: str, sha: str, runs: list[dict[str, Any]]) -> str:
+    """The base branch of the PR this commit belongs to (PRs can target release branches)."""
+    for r in runs:
+        for pr in r.get("pull_requests") or []:
+            ref = (pr.get("base") or {}).get("ref")
+            if ref:
+                return ref
+    try:
+        prs = github.api(f"repos/{repo}/commits/{sha}/pulls")
+    except Exception:
+        return ""
+    return next(((pr.get("base") or {}).get("ref", "") for pr in prs or []), "")
 
 
 def bench_dir(repo: str) -> Path:
@@ -90,7 +105,7 @@ def sample_cases(repo: str, count: int, failing_share: float, pages: int = 5, sk
             wf = Path(r["path"]).name
             if wf not in latest or r["run_attempt"] > latest[wf]["run_attempt"] or r["id"] > latest[wf]["id"]:
                 latest[wf] = r
-        if len(latest) < 3:   # too few workflows: a docs-only or partial run, not a full CI picture
+        if len(latest) < 2:   # one workflow only: a docs-only or partial run, not a full CI picture
             continue
         candidates.append(Case(sha=sha, title=runs[0].get("display_title", ""), created_at=first,
                                failed=any(r["conclusion"] == "failure" for r in latest.values()),
@@ -102,6 +117,7 @@ def sample_cases(repo: str, count: int, failing_share: float, pages: int = 5, sk
     passing = [c for c in candidates if not c.failed][:count - len(failing)]
     picked = sorted(failing + passing, key=lambda c: c.created_at, reverse=True)
     for c in picked:
+        c.base = _pr_base(repo, c.sha, c._runs)  # type: ignore[attr-defined]
         for r in c._runs:  # type: ignore[attr-defined]
             for j in github.paginate(f"repos/{repo}/actions/runs/{r['id']}/jobs?filter=latest", key="jobs"):
                 c.jobs.append(GhJob(workflow=Path(r["path"]).name, name=j["name"],
@@ -224,6 +240,7 @@ def run_case(repo: str, root: Path, case: Case, base_branch: str, per_case: int,
 
 def _run_case(repo: str, root: Path, case: Case, base_branch: str, per_case: int, max_minutes: float,
               jobs: int, only: list[str] | None, seed: int, want: set[tuple[str, str]] | None) -> list[Row]:
+    base_branch = case.base or base_branch
     base, built = prepare(root, case, base_branch)
     changed = gitinfo.changed_files(root, base, include_worktree=False)
     prof = profile.load(repo.split("/")[0])
@@ -550,7 +567,7 @@ def add_failures(repo: str, count: int, max_minutes: float, jobs: int, base_bran
             if not failed:
                 continue
             case = Case(sha=run["head_sha"], title=run.get("display_title", ""), created_at=run["created_at"],
-                        failed=True, workflows=[wf], jobs=gh)
+                        failed=True, workflows=[wf], jobs=gh, base=_pr_base(repo, run["head_sha"], [run]))
             known.add(case.sha)
             cache_file.write_text(json.dumps(infra_cache, indent=1))
             print(f"\n[failure {found + 1}/{count}] {case.sha[:10]} {wf}: "
@@ -591,8 +608,9 @@ def replan(repo: str, base_branch: str) -> int:
         mine = [r for r in rows if r["sha"] == case.sha and r["local"] in ("passed", "failed", "needs-token", "needs-memory")]
         if not mine:
             continue
-        base, _ = prepare(root, case, base_branch)
-        plan = check.build_plan(root, repo, f"origin/{base_branch}", gitinfo.changed_files(root, base, False),
+        branch = case.base or base_branch
+        base, _ = prepare(root, case, branch)
+        plan = check.build_plan(root, repo, f"origin/{branch}", gitinfo.changed_files(root, base, False),
                                 prof, None, quick=False, docker=True)
         left = {}
         for p in plan.jobs:

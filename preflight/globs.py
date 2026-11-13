@@ -23,7 +23,11 @@ def _compile(pattern: str) -> re.Pattern[str]:
                 continue
             out.append("[^/]*")
         elif c == "?":
-            out.append("[^/]")
+            # GitHub: '?' matches zero or one of the preceding character.
+            if out:
+                out[-1] = f"(?:{out[-1]})?"
+            else:
+                out.append(re.escape(c))
         elif c == "[":
             end = pattern.find("]", i + 1)
             if end == -1:

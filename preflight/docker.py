@@ -151,6 +151,9 @@ def _version_file(root: Path, name: str | None) -> str | None:
     if f.name == "go.mod":
         m = re.search(r"^(?:toolchain go|go )(\d+\.\d+(?:\.\d+)?)", text, re.M)
         return m.group(1) if m else None
+    if f.name == "pyproject.toml":
+        m = re.search(r'^requires-python\s*=\s*["\']([^"\']+)', text, re.M)
+        return m.group(1).strip() if m else None
     if f.name == "package.json":
         engines = json.loads(text).get("engines", {})
         return engines.get("node")
@@ -239,7 +242,7 @@ echo PATH+={d}/bin
             return None
         req = re.sub(r"\.x$", "", spec.strip())
         if req.startswith("pypy"):
-            req = "pypy@" + req[4:]
+            req = "pypy@" + req[4:].lstrip("-")
         script = f"""
 export UV_PYTHON_INSTALL_DIR={TOOL_CACHE}/uv-python UV_PYTHON_PREFERENCE=only-managed
 uv python install -q '{req}' >&2

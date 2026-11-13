@@ -560,3 +560,41 @@ def test_job_using_outputs_of_a_skipped_step_is_incomplete():
     """), "p.yml").jobs[0]
     workflow.classify(job, "Linux", docker=False)
     assert job.verdict == workflow.INCOMPLETE
+
+
+def test_glob_question_mark_is_optional_previous_char():
+    from preflight import globs
+    assert globs.match("**/*.yaml?", ".github/workflows/tests.yaml")
+    assert globs.match("**/*.yaml?", "a/b.yam")
+    assert not globs.match("**/*.yaml?", "a/b.yml")
+
+
+def test_runs_on_from_matrix_splits_per_runner(tmp_path):
+    from preflight import check, workflow
+    wf = workflow.parse("""
+on: pull_request
+jobs:
+  tests:
+    name: ${{ matrix.name || matrix.python }}
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
+    strategy:
+      matrix:
+        include:
+          - {python: '3.13'}
+          - {name: Windows, python: '3.13', os: windows-latest}
+    steps:
+      - run: pytest
+""", "t.yml")
+    job = wf.jobs[0]
+    groups = check._runner_groups(job, workflow.expand_matrix(job.matrix), {})
+    verdicts = {}
+    for j, cs in groups:
+        workflow.classify(j, "Linux", True, tmp_path)
+        verdicts[j.runs_on] = (j.verdict, len(cs))
+    assert verdicts == {"ubuntu-latest": ("run", 1), "windows-latest": ("other-os", 1)}
+
+
+def test_python_version_from_pyproject(tmp_path):
+    from preflight import docker
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\nrequires-python = ">=3.11"\n')
+    assert docker._version_file(tmp_path, "pyproject.toml") == ">=3.11"
