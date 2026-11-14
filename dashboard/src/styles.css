@@ -71,12 +71,14 @@ main { padding: 0 clamp(16px, 4vw, 48px); max-width: 1320px; margin: 0 auto; }
 }
 .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: 0.18em; color: var(--ice); margin: 0 0 18px; }
 .mega {
-  font-size: clamp(88px, 17vw, 220px); line-height: 0.86; margin: 0; font-weight: 600; letter-spacing: -0.06em;
-  background: linear-gradient(115deg, var(--mega-1) 15%, var(--mega-2) 55%, var(--mega-3) 95%);
-  -webkit-background-clip: text; background-clip: text; color: transparent;
+  /* inline-block: the gradient spans the digits themselves, not the whole column (on phones it showed as flat white) */
+  display: inline-block; padding: 0.04em 0.08em 0.06em 0; margin: 0;
+  font-size: clamp(88px, 17vw, 220px); line-height: 0.92; font-weight: 600; letter-spacing: -0.06em;
+  background: linear-gradient(115deg, var(--mega-1) 10%, var(--mega-2) 50%, var(--mega-3) 92%);
+  -webkit-background-clip: text; background-clip: text; color: transparent; -webkit-text-fill-color: transparent;
   font-variant-numeric: tabular-nums;
 }
-.mega span { font-size: 0.42em; letter-spacing: -0.02em; margin-left: 4px; }
+.mega .pct { font-size: 0.42em; letter-spacing: -0.02em; margin-left: 4px; }
 .lede { font-size: clamp(17px, 1.6vw, 20px); color: var(--lede); max-width: 560px; margin: 26px 0 22px; }
 .lede b { color: var(--ink); font-weight: 600; }
 .meta { display: flex; flex-wrap: wrap; gap: 8px; font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.12em; }
@@ -242,7 +244,7 @@ footer .mono { overflow-wrap: anywhere; min-width: 0; }
   .g-step { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .g-num { border-top: 0; padding-top: 0; }
   .count { margin-left: 0; }
-  .mega { font-size: 96px; }
+  .mega { font-size: clamp(76px, 25vw, 118px); }
   .stat-xl .v { font-size: 52px; }
 }
 @media (prefers-reduced-motion: reduce) {

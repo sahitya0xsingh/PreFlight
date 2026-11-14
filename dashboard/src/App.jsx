@@ -121,7 +121,7 @@ function Hero({ t, shards }) {
       <div className="hero-copy">
         <Logo size={84} className="big hero-logo" title="PreFlight logo" />
         <p className="eyebrow"><Scramble text="PREFLIGHT / LOCAL CI THAT AGREES WITH GITHUB" /></p>
-        <h1 className="mega"><Count to={pct(t.agree, t.compared)} decimals={1} /><span>%</span></h1>
+        <h1 className="mega"><Count to={pct(t.agree, t.compared)} decimals={1} /><span className="pct">%</span></h1>
         <p className="lede">
           Run a project's GitHub Actions CI on your laptop, in Docker, before you push. Replayed on real pull
           requests, PreFlight's verdict matched GitHub's on <b>{t.agree} of {t.compared}</b> job runs.
