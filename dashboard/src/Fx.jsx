@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { mountAether } from './Aether.js'
 import Logo from './Logo.jsx'
 
@@ -12,31 +12,47 @@ export function AetherBg() {
   return <canvas ref={ref} className="aether" aria-hidden="true" />
 }
 
-// Intro: a pre-flight check. A four-stage pipeline lights up while a CI-style log streams real job runs
-// from the benchmark (✓ agreed with GitHub, ✗ did not); then the mark's arrow takes off toward the top-right
-// corner and the screen wipes away behind it. Once per browser session; skipped for reduced motion.
-const STAGES = ['Checkout', 'Setup', 'Test', 'Compare']
-const FALLBACK = ['build', 'lint', 'tests (3.12)', 'typing', 'coverage', 'checkstyle', 'error-prone', 'Node.js 22']
+// Intro: a GitHub Actions-style checks run. Real job runs from the benchmark go queued -> running -> ✓/✗
+// (✗ where PreFlight disagreed with GitHub), the summary counts up, then the mark's arrow takes off and
+// the screen folds away into the top-right corner. Once per browser session; skipped for reduced motion.
+const FALLBACK = ['build', 'lint', 'tests (3.12)', 'typing', 'coverage', 'checkstyle']
+const JOBS = 6
 
 function seenIntro() {
   try { return sessionStorage.getItem('pf-intro') === '1' } catch { return false }
 }
 
+function pickJobs(runs) {
+  if (!runs.length) return FALLBACK.map((job) => ({ repo: 'preflight', job, o: 'agree', s: 0 }))
+  const seen = new Set(), out = []
+  for (const x of runs) {
+    if (seen.has(x.repo) || out.length >= JOBS) continue
+    seen.add(x.repo); out.push(x)
+  }
+  return out.concat(runs.filter((x) => !out.includes(x))).slice(0, JOBS)
+}
+
+function Status({ st }) {
+  if (st === 'ok') return <svg className="st ok" viewBox="0 0 16 16"><circle cx="8" cy="8" r="8" /><path d="M4.6 8.3l2.2 2.2 4.6-4.8" /></svg>
+  if (st === 'bad') return <svg className="st bad" viewBox="0 0 16 16"><circle cx="8" cy="8" r="8" /><path d="M5.4 5.4l5.2 5.2M10.6 5.4l-5.2 5.2" /></svg>
+  return <span className={`st ${st}`} />
+}
+
 export function Preloader({ ready, runs = [], total = 0 }) {
-  const [k, setK] = useState(0)                 // 0..1 progress
+  const [k, setK] = useState(0)
   const [phase, setPhase] = useState(reducedMotion() || seenIntro() ? 'gone' : 'run')   // run → launch → gone
   const start = useRef(0)
+  const jobs = useMemo(() => pickJobs(runs), [runs])
   useEffect(() => {
     if (phase !== 'run') return
     let raf = 0
-    if (!start.current) start.current = performance.now()   // keep the clock when `ready` flips mid-way
-    const t0 = start.current
+    if (!start.current) start.current = performance.now()
     const tick = (now) => {
-      const p = Math.min(1, (now - t0) / 2100)
+      const p = Math.min(1, (now - start.current) / 2300)
       setK(p)
       if (p < 1 || !ready) { raf = requestAnimationFrame(tick); return }
       try { sessionStorage.setItem('pf-intro', '1') } catch { /* private mode */ }
-      setTimeout(() => setPhase('launch'), 180)
+      setTimeout(() => setPhase('launch'), 350)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
@@ -48,45 +64,34 @@ export function Preloader({ ready, runs = [], total = 0 }) {
   }, [phase])
   if (phase === 'gone') return null
 
-  const ease = 1 - Math.pow(1 - k, 2)
-  const lines = runs.length ? runs : FALLBACK.map((job) => ({ repo: 'preflight', job, o: 'agree', s: 0 }))
-  const shown = Math.min(lines.length, Math.floor(ease * lines.length * 0.6) + 1)
-  const log = lines.slice(Math.max(0, shown - 7), shown)
-  const stageAt = ease * STAGES.length
+  const states = jobs.map((x, i) => {
+    const a = 0.05 + i * 0.11, b = a + 0.3
+    return k < a ? 'q' : k < b ? 'run' : x.o === 'disagree' ? 'bad' : 'ok'
+  })
+  const done = states.filter((st) => st === 'ok' || st === 'bad').length
+  const allDone = done === jobs.length
   return (
     <div className={`preloader ${phase}`} aria-hidden="true">
-      <div className="pre-grid" />
       <div className="pre-streak" />
       <div className="pre-inner">
-        <div className="pre-mark"><Logo size={88} className="big intro" /></div>
-
-        <div className="pre-pipe">
-          <div className="pre-track"><i style={{ transform: `scaleX(${Math.min(1, ease * 1.04)})` }} /></div>
-          {STAGES.map((st, i) => {
-            const state = stageAt >= i + 1 ? 'done' : stageAt >= i ? 'live' : ''
-            return (
-              <div key={st} className={`pre-node ${state}`} style={{ left: `${(i / (STAGES.length - 1)) * 100}%` }}>
-                <span className="dot">{state === 'done' ? '✓' : ''}</span>
-                <span className="lbl">{st}</span>
-              </div>
-            )
-          })}
-        </div>
-
-        <div className="pre-log">
-          {log.map((x, i) => (
-            <div key={shown - log.length + i} className={`pre-ln ${x.o}`} style={{ opacity: 0.25 + (0.75 * (i + 1)) / log.length }}>
-              <span className="m">{x.o === 'agree' ? '✓' : x.o === 'disagree' ? '✗' : '•'}</span>
-              <span className="r">{x.repo}</span>
-              <span className="j">{x.job}</span>
-              <span className="t">{x.s ? `${Math.round(x.s)}s` : ''}</span>
+        <div className="pre-mark"><Logo size={72} className="big intro" /></div>
+        <div className="pre-card">
+          <div className="pre-head">
+            <span className="pre-title">preflight check</span>
+            <span className="pre-sub">{allDone ? `${done} checks completed` : `${done} of ${jobs.length} checks`}</span>
+          </div>
+          {jobs.map((x, i) => (
+            <div key={i} className={`pre-job ${states[i]}`}>
+              <Status st={states[i]} />
+              <span className="j"><b>{x.repo}</b> / {x.job}</span>
+              <span className="t">{states[i] === 'ok' || states[i] === 'bad' ? (x.s ? `${Math.round(x.s)}s` : '') : states[i] === 'run' ? 'running' : 'queued'}</span>
             </div>
           ))}
-        </div>
-
-        <div className="pre-row">
-          <span>{phase === 'launch' ? 'Cleared for take-off' : 'Pre-flight check'}</span>
-          <span className="pre-count">{Math.round(ease * total)}<em>/{total || '—'} job runs</em></span>
+          <div className={`pre-foot ${allDone ? 'on' : ''}`}>
+            <Status st={allDone ? 'ok' : 'run'} />
+            <span>{allDone ? 'Matches GitHub' : 'Comparing with GitHub'}</span>
+            <span className="pre-count">{Math.round((1 - Math.pow(1 - k, 2)) * total)}<em> / {total || '—'} job runs</em></span>
+          </div>
         </div>
       </div>
     </div>
