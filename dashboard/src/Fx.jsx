@@ -12,37 +12,24 @@ export function AetherBg() {
   return <canvas ref={ref} className="aether" aria-hidden="true" />
 }
 
-// Intro: a GitHub Actions-style checks run. Real job runs from the benchmark go queued -> running -> ✓/✗
-// (✗ where PreFlight disagreed with GitHub), the summary counts up, then the mark's arrow takes off and
-// the screen folds away into the top-right corner. Once per browser session; skipped for reduced motion.
-const FALLBACK = ['build', 'lint', 'tests (3.12)', 'typing', 'coverage', 'checkstyle']
-const JOBS = 6
+// Intro: a pre-flight check. A four-stage pipeline lights up while a CI-style log streams real job runs
+// from the benchmark (✓ agreed with GitHub, ✗ did not); then the logo's arrow takes off along its own
+// direction, a light line trailing from its tip, and the screen folds away. Once per browser session.
+const STAGES = ['Checkout', 'Setup', 'Test', 'Compare']
+const FALLBACK = ['build', 'lint', 'tests (3.12)', 'typing', 'coverage', 'checkstyle', 'error-prone', 'Node.js 22']
+// The arrow's long arm in the logo runs from (29, 41.5) to its tip at (52, 15) on a 64-unit grid.
+const TIP = [52, 15]
+const ANGLE = Math.atan2(15 - 41.5, 52 - 29)
 
 function seenIntro() {
   try { return sessionStorage.getItem('pf-intro') === '1' } catch { return false }
-}
-
-function pickJobs(runs) {
-  if (!runs.length) return FALLBACK.map((job) => ({ repo: 'preflight', job, o: 'agree', s: 0 }))
-  const seen = new Set(), out = []
-  for (const x of runs) {
-    if (seen.has(x.repo) || out.length >= JOBS) continue
-    seen.add(x.repo); out.push(x)
-  }
-  return out.concat(runs.filter((x) => !out.includes(x))).slice(0, JOBS)
-}
-
-function Status({ st }) {
-  if (st === 'ok') return <svg className="st ok" viewBox="0 0 16 16"><circle cx="8" cy="8" r="8" /><path d="M4.6 8.3l2.2 2.2 4.6-4.8" /></svg>
-  if (st === 'bad') return <svg className="st bad" viewBox="0 0 16 16"><circle cx="8" cy="8" r="8" /><path d="M5.4 5.4l5.2 5.2M10.6 5.4l-5.2 5.2" /></svg>
-  return <span className={`st ${st}`} />
 }
 
 export function Preloader({ ready, runs = [], total = 0 }) {
   const [k, setK] = useState(0)
   const [phase, setPhase] = useState(reducedMotion() || seenIntro() ? 'gone' : 'run')   // run → launch → gone
   const start = useRef(0)
-  const jobs = useMemo(() => pickJobs(runs), [runs])
+  const root = useRef(null)
   useEffect(() => {
     if (phase !== 'run') return
     let raf = 0
@@ -52,7 +39,7 @@ export function Preloader({ ready, runs = [], total = 0 }) {
       setK(p)
       if (p < 1 || !ready) { raf = requestAnimationFrame(tick); return }
       try { sessionStorage.setItem('pf-intro', '1') } catch { /* private mode */ }
-      setTimeout(() => setPhase('launch'), 350)
+      setTimeout(() => { aim(); setPhase('launch') }, 220)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
@@ -62,36 +49,61 @@ export function Preloader({ ready, runs = [], total = 0 }) {
     const t = setTimeout(() => setPhase('gone'), 1300)
     return () => clearTimeout(t)
   }, [phase])
-  if (phase === 'gone') return null
 
-  const states = jobs.map((x, i) => {
-    const a = 0.05 + i * 0.11, b = a + 0.3
-    return k < a ? 'q' : k < b ? 'run' : x.o === 'disagree' ? 'bad' : 'ok'
-  })
-  const done = states.filter((st) => st === 'ok' || st === 'bad').length
-  const allDone = done === jobs.length
+  // Put the take-off line at the arrow's tip, pointing the arrow's way, and send the arrow along it.
+  function aim() {
+    const el = root.current, svg = el?.querySelector('.pre-mark svg')
+    if (!svg) return
+    const r = svg.getBoundingClientRect(), unit = r.width / 64
+    const x = r.left + TIP[0] * unit, y = r.top + TIP[1] * unit
+    const far = Math.hypot(innerWidth, innerHeight) * 1.2
+    el.style.setProperty('--sx', `${x}px`)
+    el.style.setProperty('--sy', `${y}px`)
+    el.style.setProperty('--ang', `${ANGLE}rad`)
+    el.style.setProperty('--fx', `${(Math.cos(ANGLE) * far) / unit}px`)
+    el.style.setProperty('--fy', `${(Math.sin(ANGLE) * far) / unit}px`)
+  }
+
+  if (phase === 'gone') return null
+  const ease = 1 - Math.pow(1 - k, 2)
+  const lines = runs.length ? runs : FALLBACK.map((job) => ({ repo: 'preflight', job, o: 'agree', s: 0 }))
+  const shown = Math.min(lines.length, Math.floor(ease * lines.length * 0.6) + 1)
+  const log = lines.slice(Math.max(0, shown - 7), shown)
+  const stageAt = ease * STAGES.length
   return (
-    <div className={`preloader ${phase}`} aria-hidden="true">
+    <div ref={root} className={`preloader ${phase}`} aria-hidden="true">
+      <div className="pre-grid" />
       <div className="pre-streak" />
       <div className="pre-inner">
-        <div className="pre-mark"><Logo size={72} className="big intro" /></div>
-        <div className="pre-card">
-          <div className="pre-head">
-            <span className="pre-title">preflight check</span>
-            <span className="pre-sub">{allDone ? `${done} checks completed` : `${done} of ${jobs.length} checks`}</span>
-          </div>
-          {jobs.map((x, i) => (
-            <div key={i} className={`pre-job ${states[i]}`}>
-              <Status st={states[i]} />
-              <span className="j"><b>{x.repo}</b> / {x.job}</span>
-              <span className="t">{states[i] === 'ok' || states[i] === 'bad' ? (x.s ? `${Math.round(x.s)}s` : '') : states[i] === 'run' ? 'running' : 'queued'}</span>
+        <div className="pre-mark"><Logo size={88} className="big intro" /></div>
+
+        <div className="pre-pipe">
+          <div className="pre-track"><i style={{ transform: `scaleX(${Math.min(1, ease * 1.04)})` }} /></div>
+          {STAGES.map((st, i) => {
+            const state = stageAt >= i + 1 ? 'done' : stageAt >= i ? 'live' : ''
+            return (
+              <div key={st} className={`pre-node ${state}`} style={{ left: `${(i / (STAGES.length - 1)) * 100}%` }}>
+                <span className="dot">{state === 'done' ? '✓' : ''}</span>
+                <span className="lbl">{st}</span>
+              </div>
+            )
+          })}
+        </div>
+
+        <div className="pre-log">
+          {log.map((x, i) => (
+            <div key={shown - log.length + i} className={`pre-ln ${x.o}`} style={{ opacity: 0.3 + (0.7 * (i + 1)) / log.length }}>
+              <span className="m">{x.o === 'agree' ? '✓' : x.o === 'disagree' ? '✗' : '•'}</span>
+              <span className="r">{x.repo}</span>
+              <span className="j">{x.job}</span>
+              <span className="t">{x.s ? `${Math.round(x.s)}s` : ''}</span>
             </div>
           ))}
-          <div className={`pre-foot ${allDone ? 'on' : ''}`}>
-            <Status st={allDone ? 'ok' : 'run'} />
-            <span>{allDone ? 'Matches GitHub' : 'Comparing with GitHub'}</span>
-            <span className="pre-count">{Math.round((1 - Math.pow(1 - k, 2)) * total)}<em> / {total || '—'} job runs</em></span>
-          </div>
+        </div>
+
+        <div className="pre-row">
+          <span>{phase === 'launch' ? 'Cleared for take-off' : 'Pre-flight check'}</span>
+          <span className="pre-count">{Math.round(ease * total)}<em>/{total || '—'} job runs</em></span>
         </div>
       </div>
     </div>
