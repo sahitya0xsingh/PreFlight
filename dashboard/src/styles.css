@@ -283,7 +283,7 @@ footer .mono { overflow-wrap: anywhere; min-width: 0; }
 .preloader.launch .pre-card { opacity: 0; transform: translateY(12px); transition: opacity .35s, transform .35s; }
 .pre-streak {
   position: absolute; left: 50%; top: 30%; width: 140vmax; height: 2px; transform-origin: left center;
-  transform: rotate(-42deg) scaleX(0); opacity: 0; background: linear-gradient(90deg, transparent, #3fb950 40%, transparent);
+  transform: rotate(-42deg) scaleX(0); opacity: 0; background: linear-gradient(90deg, transparent, #e6edf3 40%, transparent);
 }
 .preloader.launch .pre-streak { opacity: .8; transform: rotate(-42deg) scaleX(1); transition: transform 0.8s cubic-bezier(.6,0,.3,1), opacity .2s; }
 .pre-inner { display: grid; justify-items: center; gap: 26px; width: min(460px, 100%); }
@@ -303,15 +303,16 @@ footer .mono { overflow-wrap: anywhere; min-width: 0; }
 .pre-job .t { font: 12px var(--mono); color: #8b949e; font-variant-numeric: tabular-nums; }
 .pre-job.q .j { color: #6e7681; } .pre-job.q .j b { color: #8b949e; }
 .pre-foot { display: grid; grid-template-columns: 16px 1fr auto; gap: 10px; align-items: center; padding: 11px 16px; color: #8b949e; }
-.pre-foot.on span:nth-child(2) { color: #3fb950; font-weight: 600; }
+.pre-foot.on span:nth-child(2) { color: #ffffff; font-weight: 600; }
 .pre-count { color: #e6edf3; font: 12px var(--mono); font-variant-numeric: tabular-nums; }
 .pre-count em { font-style: normal; color: #8b949e; }
 .st { width: 16px; height: 16px; display: block; }
 .st.q { border-radius: 50%; border: 2px solid #484f58; box-sizing: border-box; }
 .st.run { border-radius: 50%; border: 2px solid rgba(210, 153, 34, .25); border-top-color: #d29922; box-sizing: border-box; animation: st-spin .8s linear infinite; }
 @keyframes st-spin { to { transform: rotate(360deg); } }
-.st.ok circle { fill: #238636; } .st.bad circle { fill: #da3633; }
-.st.ok path, .st.bad path { stroke: #fff; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.st.ok circle { fill: #e6edf3; } .st.bad circle { fill: #da3633; }
+.st.ok path { stroke: #0d1117; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.st.bad path { stroke: #fff; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; }
 .st.ok, .st.bad { animation: st-pop .3s cubic-bezier(.3,1.6,.4,1); }
 @keyframes st-pop { from { transform: scale(.4); } }
 @media (max-width: 420px) { .pre-job .t { display: none; } .pre-job { grid-template-columns: 16px minmax(0, 1fr); } }

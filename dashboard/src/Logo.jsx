@@ -16,9 +16,9 @@ export default function Logo({ size = 28, className = '', title = 'PreFlight', t
         stroke="#6e7681" strokeWidth="3.5" strokeLinecap="round" />
       <g className="pf-flight">
         <path className="pf-path" d="M21 33.5l8 8L52 15" pathLength="100"
-          stroke="#3fb950" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
+          stroke="#e6edf3" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
         <path className="pf-head" d="M43.5 15H52v8.5" pathLength="100"
-          stroke="#3fb950" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
+          stroke="#e6edf3" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
         {/* the commit, on its line */}
         <path className="pf-line" d="M9 33.5h7" stroke="#e6edf3" strokeWidth="2.6" strokeLinecap="round" />
         <circle className="pf-commit" cx="21" cy="33.5" r="4.6" fill="#0d1117" stroke="#e6edf3" strokeWidth="2.6" />
